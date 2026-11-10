@@ -58,3 +58,32 @@ def test_config_local_env_vence_variavel_antiga(tmp_path, monkeypatch):
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-nova-1234567890"     # aspas simples e espaços removidos
     assert "ANTHROPIC_API_KEY" in config._OVERRIDDEN and os.environ["OLLAMA_MODEL"] == "qwen2.5:3b"
     assert "VAZIA" not in os.environ                                        # linha vazia não apaga nada
+
+
+def test_colar_chave_pela_tela(chave, admin, ops, tmp_path, monkeypatch):
+    from app import config
+    f = tmp_path / "config.local.env"
+    f.write_text("BRAIN_DAILY_CAP_USD=0.20\nANTHROPIC_API_KEY=apikey_012TQ73WMkUYUsfxpnpgaUpk\nOLLAMA_MODEL=qwen2.5:3b\n", encoding="utf-8")
+    monkeypatch.setattr(config, "local_env_path", lambda: f)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "x")                      # restaurado ao fim do teste
+    good = "sk-ant-api03-" + "A" * 80 + "-QZ9x"
+    post = lambda c, k: c.post("/api/sistema/chave-claude", json={"key": k})
+    assert post(ops, good).status_code == 403                         # só administrador
+    r = post(admin, "apikey_012TQ73WMkUYUsfxpnpgaUpk")
+    assert r.status_code == 400 and "identificador" in r.json()["message"]
+    r = post(admin, "sk-ant-abc123456789FQAA")                        # colada pela metade
+    assert r.status_code == 400 and "incompleta" in r.json()["message"]
+    brain.TRANSPORT["key_check"] = lambda k: 401
+    assert post(admin, good).status_code == 400
+    assert "apikey_" in f.read_text()                                 # recusada: nada alterado
+    brain.TRANSPORT["key_check"] = lambda k: 200
+    r = post(admin, "  " + good + "\n")
+    assert r.status_code == 200 and good not in r.text and r.json()["data"]["chave"] == good[:7] + "…" + good[-4:]
+    txt = f.read_text()
+    assert f"ANTHROPIC_API_KEY={good}" in txt and "apikey_" not in txt and "BRAIN_DAILY_CAP_USD=0.20" in txt and "OLLAMA_MODEL" in txt
+    assert R.settings.anthropic_api_key == good                        # vale na hora, sem reiniciar
+    chk = next(c for c in admin.get("/api/saude").json()["data"]["checks"] if c["code"] == "claude")
+    assert chk["level"] == "verde" and good not in str(admin.get("/api/saude").json())
+    assert good not in str(R.db.all("SELECT * FROM audit_log WHERE action LIKE 'claude.%'"))
+    assert post(admin, "").status_code == 400 and good in f.read_text()          # campo vazio nunca apaga a chave
+    assert admin.post("/api/sistema/chave-claude", json={"remove": True}).status_code == 200 and "ANTHROPIC_API_KEY" not in f.read_text()

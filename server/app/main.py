@@ -421,6 +421,9 @@ def _geo_tile(req, p, b):
 
 def _channels(req, p, b): return channels.channels_overview(p)
 def _saude(req, p, b): return saude.overview(p, bool(req.query_params.get("agora")))
+def _chave_claude(req, p, b):
+    from . import brain
+    return brain.set_api_key(p, b.get("key"), remove=bool(b.get("remove")))
 def _saude_resolver(req, p, b): return saude.resolve_client_errors(p)
 
 
@@ -622,7 +625,7 @@ def create_app(**overrides):
         Route("/api/conversations/{id}/link", P(_conv_link), methods=["POST"]), Route("/api/demo/whatsapp-inbound", P(_wa_sim), methods=["POST"]),
         Route("/api/commands/parse", P(_cmd_parse), methods=["POST"]), Route("/api/commands/execute", P(_cmd_exec), methods=["POST"]),
         Route("/api/geo/countries", P(_geo_countries)), Route("/api/geo/states", P(_geo_states)),
-        Route("/api/saude", P(_saude)), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
+        Route("/api/saude", P(_saude)), Route("/api/sistema/chave-claude", P(_chave_claude), methods=["POST"]), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
         Route("/api/saude/erro-tela", client_error, methods=["POST"]),
         Route("/api/geo/imagem/mundo", P(_geo_img_world)), Route("/api/geo/imagem/regiao", P(_geo_img_box)),
         Route("/api/geo/tile/{z:int}/{x:int}/{y:int}", P(_geo_tile)),

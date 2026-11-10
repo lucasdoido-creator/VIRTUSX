@@ -126,6 +126,11 @@ async function openSaude(agora) {
   openPanel({ title: "Saúde do sistema", sub: `${st(d.level)} · verificado ${fmtTime(d.checked_at)} · versão ${esc(d.build)}`, reload: () => openSaude(),
     html: `<p class="muted">Verificações automáticas a cada 5 minutos. Item vermelho gera alerta e uma pendência crítica para a central.</p>
       <table class="t"><tbody>${d.checks.map(c => `<tr><td>${lvl(c.level)}</td><td><b>${esc(c.title)}</b><div class="muted">${esc(c.detail)}</div>${c.auto ? `<div class="muted">Automático: ${esc(c.auto)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
+      ${S.me.role === "admin_central" ? `<form class="f card" id="keyForm" autocomplete="off"><h4>Chave da Claude (reserva paga dos CEOs)</h4>
+        <p class="muted">Cole a chave inteira (começa com <span class="mono">sk-ant-</span>; use o botão de copiar do console). Ela é testada sem custo,
+        só é salva se a Anthropic aceitar, fica apenas neste computador (config.local.env) e nunca mais aparece inteira na tela.</p>
+        <div class="row"><input name="key" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-ant-api03-…" style="flex:1;min-width:260px" aria-label="Chave da API da Claude">
+        <button class="btn small primary">Salvar e testar</button><button type="button" class="btn small" id="keyDel">Remover chave</button></div></form>` : ""}
       <div class="row" style="margin:10px 0"><button class="btn small primary" id="sdNow">Verificar agora</button>
       ${d.client_errors.some(e => !e.resolved) ? `<button class="btn small" id="sdRes">Marcar erros de tela como resolvidos</button>` : ""}</div>
       <h4>Erros registrados na tela (navegador)</h4>
@@ -133,6 +138,13 @@ async function openSaude(agora) {
         <div class="muted mono">${esc(e.source || "")}${e.line ? ":" + e.line : ""} · ${esc(e.onde || "")} · tela ${esc(e.build || "?")} / servidor ${esc(e.server_build || "?")} · último ${fmtTime(e.last_at)}</div></div>`).join("") : `<p class="muted">Nenhum.</p>`}
       <h4>Cópias de segurança (data/backups)</h4>${d.backups.length ? d.backups.map(b => `<div class="muted mono">${esc(b.file)} · ${(b.bytes / 1e6).toFixed(1)} MB</div>`).join("") : `<p class="muted">Nenhuma ainda.</p>`}` });
   $("#sdNow").onclick = () => openSaude(true).then(updateSaude);
+  const kf = $("#keyForm"); if (kf) {
+    kf.onsubmit = async e => { e.preventDefault(); const v = kf.key.value; kf.key.value = "";   // some do campo na hora
+      try { const r = await api("/api/sistema/chave-claude", { method: "POST", body: { key: v } }); toast(`Chave aceita e salva (${r.chave}). Os CEOs já podem usar a Claude.`); openSaude(true); }
+      catch (er) { toast(er.message, true); } };
+    $("#keyDel").onclick = async () => { if (!confirm("Remover a chave da Claude? Os CEOs passam a usar só a IA grátis local.")) return;
+      try { await api("/api/sistema/chave-claude", { method: "POST", body: { remove: true } }); toast("Chave removida"); openSaude(true); } catch (er) { toast(er.message, true); } };
+  }
   const r = $("#sdRes"); if (r) r.onclick = async () => { await api("/api/saude/erros/resolver", { method: "POST" }); openSaude(true); updateSaude(); };
 }
 

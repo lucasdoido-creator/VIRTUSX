@@ -88,7 +88,12 @@ await A.click("[data-view='3d']"); await A.click("#basemapSeg [data-bm='ruas']")
 if ((await A.getAttribute("#basemapSeg [data-bm='ruas']", "aria-pressed")) !== "true") throw new Error("seletor de mapa não marcou Ruas");
 await A.click("#basemapSeg [data-bm='satelite']"); await A.waitForTimeout(1500);
 await A.click("#saudeBtn"); await A.waitForSelector("#pTitle:has-text('Saúde do sistema')", { timeout: 10000 });
-await A.click("#sdNow"); await A.waitForSelector("#pBody td b:has-text('Banco de dados')", { timeout: 15000 });
+await Promise.all([A.waitForResponse(r => r.url().includes("/api/saude?agora=1"), { timeout: 30000 }), A.click("#sdNow")]);
+await A.waitForSelector("#pBody td b:has-text('Banco de dados')", { timeout: 15000 }); await A.waitForTimeout(400);
+await A.fill("#keyForm [name=key]", "apikey_012TQ73WMkUYUsfxpnpgaUpk"); await A.click("#keyForm button.primary");
+await A.waitForSelector(".toast:has-text('identificador da chave')", { timeout: 10000 });
+if (await A.inputValue("#keyForm [name=key]")) throw new Error("campo da chave não foi limpo");
+log("campo da chave: identificador recusado com explicação; campo limpo na hora");
 await A.screenshot({ path: `${OUT}/m6_saude.png` });
 // Nenhum erro de JavaScript pode ter sido registrado pelo vigia durante todo o teste
 const saude = await A.evaluate(async () => (await (await fetch("/api/saude", { headers: { "X-Requested-With": "plataforma" } })).json()).data);

@@ -61,9 +61,39 @@ _FROM_FILE: set = set()
 _OVERRIDDEN: set = set()
 
 
+def local_env_path():
+    return ROOT / "config.local.env"
+
+
+def write_local_env(key, value):
+    """Troca (ou remove, com value=None) uma linha do config.local.env, mantendo o resto do arquivo. Gravação atômica."""
+    p = local_env_path()
+    lines = p.read_text(encoding="utf-8-sig").splitlines() if p.exists() else []
+    out, done = [], False
+    for line in lines:
+        l = line.strip()
+        l2 = l[7:].strip() if l.lower().startswith("export ") else l
+        if not l2.startswith("#") and "=" in l2 and l2.split("=", 1)[0].strip() == key:
+            if value is not None and not done:
+                out.append(f"{key}={value}")
+                done = True
+            continue
+        out.append(line)
+    if value is not None and not done:
+        out.append(f"{key}={value}")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+    tmp.replace(p)
+    if value is None:
+        os.environ.pop(key, None)
+    else:
+        os.environ[key] = value
+        _FROM_FILE.add(key)
+
+
 def _load_local_env():
     """Lê config.local.env (fica só no seu computador; não vai para o GitHub). O arquivo tem prioridade sobre variáveis do sistema."""
-    p = ROOT / "config.local.env"
+    p = local_env_path()
     if not p.exists():
         return
     for line in p.read_text(encoding="utf-8-sig").splitlines():  # utf-8-sig tolera BOM do Bloco de Notas

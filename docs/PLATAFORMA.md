@@ -239,6 +239,7 @@ Dica: para precisão total, copie as coordenadas do Google Maps (clique direito 
 - **Pesquisa (Helena) e Conteúdo (Igor)**: IA local; Claude só se `ROUTINE_FALLBACK_TO_CLAUDE` estiver ligado.
 - **Ana (coordenação), CEO de cada base, Estoque, Financeiro, Catálogo, Análise**: **determinísticos e grátis** — não usam IA nem a chave (de propósito: contas e prazos não podem depender de IA).
 - **Saúde → "Claude (chave da API)"**: testa a chave **sem gastar crédito** (consulta a lista de modelos), a cada hora ou em "Verificar agora"; mostra só o começo e o fim da chave e de onde ela foi lida. 401 = chave recusada (revogada, digitada errada ou de outra conta): gere outra em console.anthropic.com → API Keys.
+- **Colar a chave pela tela** (só administrador): *Saúde → Chave da Claude → Salvar e testar*. A chave é testada sem custo e só é salva se a Anthropic aceitar; vai para `config.local.env` (só neste computador), vale na hora (sem reiniciar) e nunca mais aparece inteira. Identificador (`apikey_…`) e chave cortada são recusados com explicação. Campo vazio nunca apaga: para tirar a chave, use *Remover chave*.
 - `config.local.env` tem prioridade sobre uma variável `ANTHROPIC_API_KEY` antiga do Windows; aspas e espaços em volta do valor são ignorados.
 - Agente que recebe tarefa com **checklist** (trabalho físico) entrega o que pode como comentário e deixa a tarefa "aguardando terceiro" para uma pessoa — não fica falhando em loop.
 
@@ -261,7 +262,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **101 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **102 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

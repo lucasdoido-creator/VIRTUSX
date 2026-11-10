@@ -97,6 +97,50 @@ OLLAMA_TIMEOUT_S = {"rotina": 240, "decisao": 420}   # IA local no processador d
 _key_state = {"at": 0.0, "result": None}
 
 
+def _probe(key):
+    if TRANSPORT.get("key_check"):
+        return TRANSPORT["key_check"](key)
+    import httpx
+    return httpx.get("https://api.anthropic.com/v1/models", timeout=15,
+                     headers={"x-api-key": key, "anthropic-version": "2023-06-01"}).status_code
+
+
+def set_api_key(actor, key, remove=False):
+    """Chave colada pela tela (só administrador): testa sem custo e só grava se a Anthropic aceitar.
+    Grava em config.local.env (fica só neste computador) e passa a valer na hora. Nunca devolve a chave."""
+    from . import config
+    from .core import AppError, audit
+    if not (actor.kind == "user" and actor.role == "admin_central"):
+        from .core import Forbidden
+        raise Forbidden("Só o administrador pode trocar a chave da Claude.", "somente_admin")
+    key = "".join((key or "").split()).strip('"').strip("'")
+    if not key and not remove:
+        raise AppError("Cole a chave no campo (começa com sk-ant-). Para tirar a chave, use o botão Remover chave.", "chave_vazia")
+    if remove:
+        key = ""
+    if key:
+        if key.startswith("apikey_"):
+            raise AppError("Isso é o identificador da chave, não a chave. A chave começa com sk-ant- e aparece só uma vez, ao criar.", "chave_identificador")
+        if not key.startswith("sk-ant-") or len(key) < 60:
+            raise AppError(f"Chave incompleta ou inválida ({len(key)} caracteres). Ela começa com sk-ant- e tem uns 100 caracteres: "
+                           "use o botão de copiar do console.", "chave_invalida")
+        try:
+            code = _probe(key)
+        except Exception as e:
+            raise AppError(f"Sem conexão com a Anthropic para testar a chave agora ({type(e).__name__}). Nada foi alterado.", "sem_conexao")
+        if code in (401, 403):
+            raise AppError(f"A Anthropic recusou esta chave ({code}). Nada foi alterado. Gere outra em console.anthropic.com → API Keys.", "chave_recusada")
+        if code != 200:
+            raise AppError(f"Resposta inesperada da Anthropic ({code}). Nada foi alterado; tente de novo.", "chave_nao_testada")
+    config.write_local_env("ANTHROPIC_API_KEY", key or None)
+    R.settings.anthropic_api_key = key
+    _key_state.update(at=time.time(), result={"nivel": "verde", "detalhe": "chave aceita pela Anthropic (teste sem custo)"} if key else None)
+    masked = f"{key[:7]}…{key[-4:]}" if key else None
+    with R.db.tx() as c:
+        audit(c, actor, "claude.chave_atualizada" if key else "claude.chave_removida", "settings", "anthropic_api_key", None, {"chave": masked})
+    return {"ok": True, "chave": masked, "configurada": bool(key)}
+
+
 def key_check(force=False):
     """Confere se a chave da Claude é aceita, SEM gastar crédito (lista de modelos, não gera texto). Cache de 1 h."""
     from .config import _FROM_FILE, _OVERRIDDEN
@@ -112,12 +156,7 @@ def key_check(force=False):
     if not force and _key_state["result"] and time.time() - _key_state["at"] < 3600:
         return {**_key_state["result"], **base}
     try:
-        if TRANSPORT.get("key_check"):
-            code = TRANSPORT["key_check"](key)
-        else:
-            import httpx
-            code = httpx.get("https://api.anthropic.com/v1/models", timeout=15,
-                             headers={"x-api-key": key, "anthropic-version": "2023-06-01"}).status_code
+        code = _probe(key)
         if code == 200:
             res = {"nivel": "verde", "detalhe": "chave aceita pela Anthropic (teste sem custo)"}
         elif code in (401, 403):
