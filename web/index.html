@@ -42,15 +42,15 @@
     <div id="live" class="pill" aria-live="polite"><i class="dot"></i><span>Conectando…</span></div>
     <div class="search" id="search"><input id="q" type="search" placeholder="Buscar país, cidade, parceiro, unidade, agente, pedido…" aria-label="Buscar"><div id="qres" class="results hidden" role="listbox"></div></div>
     <div class="seg" id="viewSeg" role="group" aria-label="Modo de visualização">
-      <button data-view="3d" aria-pressed="true">Cidade 3D</button><button data-view="tabelas" aria-pressed="false">Tabelas</button>
+      <button data-view="3d" aria-pressed="true">Mapa 3D</button><button data-view="tabelas" aria-pressed="false">Tabelas</button>
     </div>
     <button class="btn small" id="cmdBtn" title="Central de comandos (Ctrl+K)">⌘ Comandos</button>
     <button class="btn small" id="inboxBtn" title="Atendimento / WhatsApp">💬 Atendimento <span id="unread" class="badge hidden"></span></button>
     <div class="spacer"></div>
     <span id="pausedNote" class="badge bad hidden">Agentes pausados</span>
-    <label class="tog hidden" id="pauseWrap"><input type="checkbox" id="pause"> Pausa global dos agentes</label>
-    <label class="tog"><input type="checkbox" id="reduce"> Reduzir animações</label>
-    <label class="tog"><input type="checkbox" id="lite"> Modo leve</label>
+    <label class="tog hidden" id="pauseWrap" title="Pausa global dos agentes"><input type="checkbox" id="pause"> <span class="tl">Pausar agentes</span><span class="ts">Pausar</span></label>
+    <label class="tog" title="Reduzir animações"><input type="checkbox" id="reduce"> <span class="tl">Reduzir animações</span><span class="ts">Menos anim.</span></label>
+    <label class="tog" title="Modo leve (celular/PC fraco)"><input type="checkbox" id="lite"> <span class="tl">Modo leve</span><span class="ts">Leve</span></label>
     <span id="who" class="muted" style="white-space:nowrap"></span>
     <button class="btn small" id="logout">Sair</button>
   </header>

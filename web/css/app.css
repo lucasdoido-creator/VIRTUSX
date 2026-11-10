@@ -13,15 +13,15 @@ a{color:var(--accent)}
   background:repeating-linear-gradient(135deg,#fbbf24 0 14px,#f59e0b 14px 28px)}
 .envbar.sandbox{background:repeating-linear-gradient(135deg,#60a5fa 0 14px,#3b82f6 14px 28px);color:#04122b}
 .envbar.production{background:#b91c1c;color:#fff}
-.app{position:fixed;inset:26px 0 0 0;display:grid;grid-template-rows:56px 1fr 34px}
-header.top{display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:linear-gradient(#0b1120,#0a0f1c)}
+.app{position:fixed;inset:26px 0 0 0;display:grid;grid-template-rows:56px 1fr 34px;grid-template-columns:minmax(0,1fr)}
+header.top{display:flex;align-items:center;gap:12px;padding:0 14px;min-width:0;border-bottom:1px solid var(--line);background:linear-gradient(#0b1120,#0a0f1c)}
 .brand{font-weight:700;letter-spacing:.01em;display:flex;align-items:center;gap:8px;white-space:nowrap}
 .brand i{width:22px;height:22px;border-radius:6px;background:conic-gradient(from 210deg,var(--accent),var(--accent2),var(--accent));display:inline-block}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;border:1px solid var(--line2);font-size:12px;color:var(--muted);white-space:nowrap}
 .pill .dot{width:8px;height:8px;border-radius:50%;background:var(--gray)}
 .pill.live .dot{background:var(--ok);box-shadow:0 0 0 3px rgba(52,211,153,.2)}
 .pill.late .dot{background:var(--warn)}.pill.off .dot{background:var(--bad)}
-.search{flex:1;max-width:420px;position:relative}
+.search{flex:1 1 220px;min-width:200px;max-width:420px;position:relative}
 .search input{width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:8px 12px}
 .search .results{position:absolute;top:40px;left:0;right:0;background:var(--panel2);border:1px solid var(--line2);border-radius:10px;z-index:30;max-height:360px;overflow:auto}
 .search .results button{display:block;width:100%;text-align:left;background:none;border:0;padding:8px 12px;cursor:pointer}
@@ -127,3 +127,8 @@ form.f input,form.f select,form.f textarea{background:var(--bg2);border:1px soli
 .chat textarea{flex:1;background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:7px;color:var(--text);resize:vertical;min-height:40px}
 .cmdres{margin-top:10px}
 @media (max-width:760px){.inbox{grid-template-columns:1fr;height:auto}.kanban{grid-template-columns:repeat(6,80vw)}}
+
+/* telas médias: cabeçalho mais compacto (nunca empurra o painel para fora da tela) */
+.seg button{white-space:nowrap}header.top .btn{white-space:nowrap;flex:none}
+label.tog .ts{display:none}
+@media (max-width:1680px){header.top{gap:8px}label.tog .tl{display:none}label.tog .ts{display:inline}.brand span{display:none}}
