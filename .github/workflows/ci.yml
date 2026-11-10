@@ -86,7 +86,7 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:8004/api/health && break; sleep 1; done
           node scripts/e2e_expansao.mjs http://127.0.0.1:8004 /tmp/shots
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: capturas-e-log
           path: |
