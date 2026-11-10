@@ -387,6 +387,9 @@ def get_routine(code):
     from . import ceo
     if code.startswith("ceo_"):
         return ceo.r_ceo
+    if code.startswith("base_"):
+        from . import gerente
+        return gerente.r_base
     return {**ROUTINES, "pesquisa": ceo.r_pesquisa, "conteudo": ceo.r_conteudo}[code]
 
 

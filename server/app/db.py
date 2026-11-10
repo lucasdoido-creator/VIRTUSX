@@ -344,6 +344,7 @@ CREATE TABLE IF NOT EXISTS messages (
   occurred_at TEXT, created_at TEXT NOT NULL, error TEXT
 );
 CREATE TABLE IF NOT EXISTS research_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS loyalty_points (id TEXT PRIMARY KEY, partner_id TEXT NOT NULL, task_id TEXT NOT NULL UNIQUE, points INTEGER NOT NULL, reason TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS client_errors (
   id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, message TEXT NOT NULL, source TEXT, line INTEGER, where_ TEXT, stack TEXT,

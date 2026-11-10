@@ -72,12 +72,20 @@ async function start() {
   S.world = await api("/api/world");
   try {
     S.renderer = new Renderer($("#gl"), { lite: S.lite });
+    window.__cam = () => ({ ...S.renderer.cam });   // leitura da câmera (testes automáticos)
     S.w = new World(S.renderer, $("#labels"), { onSelect: select, onError: (er, where) => window.__vigia && window.__vigia(er.message, "", 0, er.stack, where) });
     S.w.build(S.world);
     if (S.world.view === "parceiro" && S.world.partners[0]) S.w.focus("partner", S.world.partners[0].id); else S.w.focus("global");
     const bmSeg = $("#basemapSeg"), bmMark = () => bmSeg.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.bm === S.w.basemap)));
     bmSeg.querySelectorAll("button").forEach(b => b.onclick = () => { try { localStorage.setItem("mapaBase", b.dataset.bm); } catch {} S.w.setBasemap(b.dataset.bm); bmMark(); });
     bmMark();
+    const nav = { in: () => S.w.zoomStep(0.6), out: () => S.w.zoomStep(1.6), north: () => S.w.resetNorth(), home: () => goWorld(),
+      tilt: () => { const top = S.w.toggleTilt(); $("#navctl [data-nav=tilt]").textContent = top ? "3D" : "2D"; },
+      help: () => $("#navhelp").classList.toggle("hidden") };
+    $("#navctl").querySelectorAll("[data-nav]").forEach(b => b.onclick = () => nav[b.dataset.nav]());
+    const lg = $("#legend"), lt = $("#lgTog"); let lgOpen = false; try { lgOpen = localStorage.getItem("legendaAberta") === "1"; } catch {}
+    const lgSet = o => { lg.classList.toggle("compact", !o); lt.textContent = o ? "ocultar" : "ⓘ mais"; lt.setAttribute("aria-expanded", String(o)); try { localStorage.setItem("legendaAberta", o ? "1" : "0"); } catch {} };
+    lgSet(lgOpen); lt.onclick = () => { lgOpen = !lgOpen; lgSet(lgOpen); };
     S.w.h.onImagery = (what, okImg) => { if (!okImg && what === "mundo" && S.w.basemap !== "vetor") toast("Imagem de satélite ainda não baixada (o servidor precisa de internet uma vez). Mostrando o mapa escuro.", true); };
     api("/api/geo/countries").then(g => { S.geo = g; if (g.available) S.w.setGeo(g); else toast("Mapa real ainda não baixado: o servidor precisa de internet uma vez.", true); }).catch(() => {});
   } catch (e) {
@@ -220,6 +228,7 @@ function select(kind, id, pick) {
   if (kind === "agent") return openAgent(id);
   if (kind === "unit") return openUnit(pick.data);
   if (kind === "base") return openBase(pick.data || S.world.service_bases.find(b => b.id === id));
+  if (kind === "freelancer") return openFreelancer(pick.data);
   if (kind === "order") return openOrder(id);
   if (kind === "task") return openTask(id);
 }
@@ -299,6 +308,7 @@ const FLOOR_RENDER = {
       <dt>Fuso / moeda</dt><dd>${esc(p.timezone)} · ${esc(p.currency)}</dd><dt>Situação</dt><dd>${st(b.status.level)}</dd></dl>
       <h4>Unidades</h4>${f.units.map(u => `<div class="card"><b>${esc(u.name)}</b> — ${esc(u.city || "")}/${esc(u.state || "")} ${u.base_name ? badge("atendida por " + u.base_name) : ""} ${u.active === 0 ? badge("inativa", "warn") : ""} ${u.location_status === "confirmada"
         ? badge("localização confirmada", "ok") + `<div class="muted">${esc(u.location_source || "")}</div>` : badge("localização não confirmada", "warn") + `<div class="muted">Posição no 3D é ilustrativa.</div>`}</div>`).join("")}
+      ${fidelidadeHtml(p.id)}
       <h4>Avisos</h4>${f.avisos.length ? `<ul>${f.avisos.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : `<p class="muted">Sem avisos.</p>`}
       <h4>Responsáveis</h4>${f.responsaveis.map(u => `<div>${esc(u.name)} <span class="muted">${esc(u.role)}</span></div>`).join("")}`; },
   comercial: b => { const f = b.floors.comercial, cur = b.partner.currency, w = can("storefronts.write");
@@ -566,11 +576,42 @@ function openBase(b) {
   openPanel({ title: `Base · ${esc(b.name)}`, sub: `${esc(b.city || "")}/${esc(b.state || "")} ${b.location_status === "confirmada" ? badge("endereço confirmado", "ok") : badge("posição ilustrativa")}`,
     html: `<dl class="kv"><dt>Técnicos ativos</dt><dd>${b.tecnicos}</dd><dt>Aguardando autorização</dt><dd>${b.pendentes}</dd><dt>Unidades atendidas</dt><dd>${b.units.length}</dd></dl>
     <h4>Clientes atendidos</h4>${clients.map(p => `<div class="card click" data-p="${p.id}" style="cursor:pointer">${st(p.status.level)} ${esc(p.name)}</div>`).join("") || `<p class="muted">Nenhuma unidade vinculada ainda.</p>`}
-    ${can("cadastros.read") ? `<button class="btn small" id="goCad">Abrir cadastros</button>` : ""}` });
+    <h4>CEO da base</h4><div class="card" id="baseCeo"><p class="muted">Carregando…</p></div>
+    ${can("cadastros.read") ? `<button class="btn small" id="goCad">Abrir cadastros</button>` : ""}`, reload: () => openBase((S.world.service_bases || []).find(x => x.id === b.id) || b) });
+  if (can("cadastros.read")) api(`/api/bases/${b.id}/ceo`).then(g => { const el = $("#baseCeo"); if (!el) return; const d = g.dados || {};
+    el.innerHTML = `${g.resumo ? `<div>${esc(g.resumo)}</div><div class="muted">última volta ${fmtTime(g.em)}</div>` : `<p class="muted">Ainda não rodou (roda a cada 30 min).</p>`}
+      ${(d.carga || []).length ? `<h4>Carga por técnico</h4>${d.carga.map(x => `<div>${esc(x.tecnico)} · ${x.abertas} aberta(s)</div>`).join("")}` : ""}
+      ${(d.por_unidade || []).length ? `<h4>Por unidade</h4><table class="t"><tbody>${d.por_unidade.map(x => `<tr><td>${esc(x.cliente)} · ${esc(x.unidade)}</td><td>${x.abertas} aberta(s)</td><td>${x.atrasadas ? badge(x.atrasadas + " atrasada(s)", "bad") : ""}</td></tr>`).join("")}</tbody></table>` : ""}
+      <div class="row" style="margin-top:8px">${can("agents.run") ? `<button class="btn small primary" id="ceoBaseRun">Executar CEO agora</button>` : ""}
+      <button class="btn small" id="ceoBaseAppr">Aprovações</button>
+      ${can("policies.write") ? `<button class="btn small" id="ceoBaseAuto" title="Cria/altera a política tarefas.atribuir">Distribuição: alternar automática ↔ com aprovação</button>` : ""}</div>
+      <p class="muted">Organiza as tarefas das unidades desta base: preventiva mensal, distribuição por carga (com sua aprovação, ou automática se você criar a política "tarefas.atribuir"), atrasos encaminhados.</p>`;
+    const rb = $("#ceoBaseRun"); if (rb) rb.onclick = () => act(() => api(`/api/agents/base_${b.id}/run`, { method: "POST" }), "CEO da base executou");
+    $("#ceoBaseAppr").onclick = () => { closePanel(); S.tab = "aprovacoes"; setView("tabelas"); };
+    const au = $("#ceoBaseAuto"); if (au) au.onclick = async () => { const pol = (await api("/api/policies")).policies.find(x => x.action === "tarefas.atribuir");
+      const mode = pol && pol.mode === "automatico" ? "revisao" : "automatico";
+      await act(() => api("/api/policies/tarefas.atribuir", { method: "PUT", body: { mode } }), mode === "automatico" ? "O CEO das bases agora distribui sozinho (por carga)" : "Distribuição volta a pedir sua aprovação"); };
+  }).catch(() => {});
   $("#pBody").querySelectorAll("[data-p]").forEach(x => x.onclick = () => select("partner", x.dataset.p));
   const g = $("#goCad"); if (g) g.onclick = () => { closePanel(); S.tab = "cadastros"; setView("tabelas"); };
 }
 
+function fidelidadeHtml(pid) {
+  const p = (S.world.partners || []).find(x => x.id === pid); const f = p && p.fidelidade; if (!f) return "";
+  const pct = f.proximo_nivel_em == null ? 100 : Math.round(100 * f.servicos / (f.servicos + f.proximo_nivel_em));
+  return `<h4>Fidelidade · cashback</h4><div class="card"><b>Nível ${f.nivel}</b> · ${f.servicos} serviço(s) concluído(s) · <b>${f.pontos} pontos</b>
+    <div class="bar" style="margin:6px 0"><i style="width:${pct}%"></i></div>
+    <div class="muted">${f.proximo_nivel_em == null ? "Nível máximo." : `Faltam ${f.proximo_nivel_em} serviço(s) para o nível ${f.nivel + 1} (o prédio cresce).`}
+    Pontos são registro de fidelidade: não movimentam dinheiro; resgate é decisão da central.</div></div>`;
+}
+function openFreelancer(f) {
+  openPanel({ title: esc(f.name), sub: `Freelancer · base ${esc(f.base || "")} ${f.active ? badge("autorizado", "ok") : badge("aguardando autorização", "warn")}`,
+    html: `<dl class="kv"><dt>Tarefas abertas</dt><dd>${f.abertas}</dd><dt>Concluídas em 30 dias</dt><dd>${f.feitas_30d}</dd>
+      <dt>Posição no mapa</dt><dd>Ilustrativa, ao lado da base (não é localização real nem rastreamento).</dd></dl>
+      <div class="row" style="margin:8px 0"><button class="btn small" id="flTasks">Ver tarefas dele(a)</button>${can("cadastros.read") ? `<button class="btn small" id="flCad">Abrir cadastro</button>` : ""}</div>` });
+  $("#flTasks").onclick = () => { closePanel(); S.tab = "tarefas"; setView("tabelas"); setTimeout(() => { $("#tFilter").value = f.name.split(" ·")[0]; renderTables(); }, 50); };
+  const c = $("#flCad"); if (c) c.onclick = () => { closePanel(); S.tab = "cadastros"; setView("tabelas"); };
+}
 function openUnit(u) {
   openPanel({ title: esc(u.name), sub: esc(u.partner), html: `<dl class="kv"><dt>Cidade/estado</dt><dd>${esc(u.city || "—")}/${esc(u.state || "—")} · ${esc(u.country)}</dd>
     <dt>Localização</dt><dd>${u.location_status === "confirmada" ? badge("endereço confirmado", "ok") + " " + esc(u.location_source || "") : badge("endereço não confirmado", "warn")}</dd>
@@ -938,6 +979,8 @@ function setupSearch() {
     for (const st of (S.w && S.w.states ? S.w.states.states : [])) if (st.name.toLowerCase().includes(q)) items.push(["state", st.name, `Estado · ${st.name}`, st, S.w.states.country]);
     for (const p of S.world.partners) { if (p.name.toLowerCase().includes(q)) items.push(["partner", p.id, `Parceiro · ${p.name} · ${statusText(p.status.level)}`]);
       for (const u of p.units) if ((u.name + " " + (u.city || "") + " " + (u.state || "")).toLowerCase().includes(q)) items.push(["unit", u.id, `Unidade · ${u.name} (${u.city}/${u.state})`, { ...u, partner: p.name }]); }
+    for (const b of S.world.service_bases || []) { if ((b.name + " " + (b.city || "")).toLowerCase().includes(q)) items.push(["base", b.id, `Base · ${b.name} (${b.city || ""})`, b]);
+      for (const f of b.freelancers || []) if (f.name.toLowerCase().includes(q)) items.push(["freelancer", f.id, `Freelancer · ${f.name}`, { ...f, base: b.name }]); }
     for (const a of S.world.agents) if ((a.name + a.role).toLowerCase().includes(q)) items.push(["agent", a.id, `Agente · ${a.name}`]);
     for (const w of S.world.warehouses) if ((w.name + w.city).toLowerCase().includes(q)) items.push(["warehouse", w.id, `Armazém · ${w.name}`]);
     if (q.length >= 3) { try { (await api(`/api/orders?q=${encodeURIComponent(q)}`)).slice(0, 5).forEach(o => items.push(["order", o.id, `Pedido · ${o.code} · ${ORDER_STATES[o.status]}`]));

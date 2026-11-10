@@ -123,6 +123,7 @@ def save_base(actor: Principal, data, base_id=None):
             lat, lng, src = _coords(data, row["city"], row["state"])
             c.execute("UPDATE service_bases SET name=?,city=?,state=?,address=?,location_status=?,active=?,lat=?,lng=?,geo_source=? WHERE id=?",
                       (row["name"], row["city"], row["state"], row["address"], row["location_status"], row["active"], lat, lng, src, base_id))
+            c.execute("UPDATE agents SET name=? WHERE code=?", (f"CEO da base · {row['name']}", "base_" + base_id))
             audit(c, actor, "base.alterada", "service_base", base_id, dict(before), row)
         else:
             base_id = new_id("bas")
@@ -132,6 +133,8 @@ def save_base(actor: Principal, data, base_id=None):
                        1 if R.settings.is_demo else 0, lat, lng, src))
             audit(c, actor, "base.criada", "service_base", base_id, None, row)
         emit(c, "cadastro.base", "cadastros", "service_base", base_id, status="ativa" if row["active"] else "inativa", payload={"name": row["name"]})
+        from .gerente import ensure_base_ceos
+        ensure_base_ceos(c)   # toda base nova ganha seu CEO
     return base_id
 
 

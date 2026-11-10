@@ -221,6 +221,18 @@ Dica: para precisão total, copie as coordenadas do Google Maps (clique direito 
 
 **Operação manual para um agente**: abra o agente (mapa ou *Tabelas → Agentes*) → *Nova operação manual*: tipo (ex.: pesquisar mercado, escrever texto, analisar conta, revisar prazos), cliente, prazo, prioridade e instruções; "executar agora" dispara a rotina na hora. Vira uma tarefa atribuída ao agente (auditada); o resultado volta como comentário na tarefa. No CEO de um cliente, a operação entra como ideia para ele estudar e dividir com a equipe. As instruções não dão ao agente nenhuma permissão nova.
 
+## 7.6 Navegação, CEO de cada base, crescimento dos clientes e casas dos freelancers
+
+**Mouse (como Google Maps)**: arrastar = mover (o ponto sob o mouse acompanha o mouse) · roda = zoom em direção ao cursor · duplo clique = aproximar (Shift + duplo clique = afastar) · botão direito, Ctrl ou Shift + arrastar = girar e inclinar · dois dedos (celular) = zoom e giro. Teclado com o mapa em foco: setas, + / −, Q / E, PageUp/PageDown. Botões na tela: + − · N (norte) · 2D/3D · ⌂ (visão geral) · ? (ajuda). Qualquer toque do usuário interrompe voos automáticos da câmera. A legenda fica compacta (ⓘ mais para expandir).
+
+**CEO de cada base** (um por base/filial, criado automaticamente, grátis/determinístico, a cada 30 min ou "Executar CEO agora" no painel da base): lê unidades atendidas, tarefas e carga dos técnicos; agenda a **preventiva mensal** de unidades sem nenhuma; **distribui** tarefas sem responsável pelos técnicos da base com menor carga — via política `tarefas.atribuir`: sem política, cria UMA solicitação por volta para você aprovar (Aprovações); com o botão "Distribuição: alternar automática" (admin) aplica direto; encaminha à central atrasos acima de 2 dias (uma pendência por tarefa). O resumo aparece no painel da base. Partners não veem bases, equipe nem resumos.
+
+**Clientes crescem**: o prédio do cliente começa pequeno e sobe de nível conforme os serviços são concluídos (níveis em 3, 8, 20 e 50 serviços; coroa dourada a partir do nível 4). **Pontos de cashback**: cada serviço concluído (tarefa do cliente, não pendência) credita pontos — padrão 10, ajustável (`POST /api/cadastros/pontos`); crédito único por tarefa (nunca em dobro). Pontos são registro de fidelidade: **não movimentam dinheiro**; resgate é decisão da central. Painel do cliente → Recepção → *Fidelidade · cashback*.
+
+**Bases** são campus grandes (torre, anexo, heliponto com o CEO da base, antena). **Freelancers** aparecem como casas ao redor da base (posição ilustrativa — não é localização real nem rastreamento), com tarefas abertas; aguardando autorização = casa translúcida. No demo há 2 freelancers fictícios (Rafa e Bia, base Demo em Guarulhos); em produção aparecem os seus freelancers reais cadastrados.
+
+**Visual**: brilho do sol e luz de contorno nos prédios, sombras projetadas, céu azul-noite no horizonte.
+
 ## 8. Como executar e acessar
 
 **Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
@@ -240,7 +252,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **92 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **98 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

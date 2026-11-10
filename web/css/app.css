@@ -136,3 +136,16 @@ label.tog .ts{display:none}
 .btn.saude i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#94a3b8;vertical-align:middle}
 .btn.saude.verde i{background:#34d399}.btn.saude.amarelo i{background:#fbbf24}.btn.saude.vermelho i{background:#f87171;box-shadow:0 0 8px #f87171}
 .attrib{font-size:10px;color:var(--muted);margin-top:6px}
+
+.navctl{position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;z-index:20}
+.navctl button{width:38px;height:38px;border-radius:10px;border:1px solid var(--line2);background:rgba(10,16,30,.88);color:var(--text);font-size:17px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.navctl button:hover,.navctl button:focus-visible{background:#1b2740;outline:none;border-color:var(--accent)}
+.navhelp{position:absolute;right:62px;bottom:14px;z-index:20;background:rgba(10,16,30,.95);border:1px solid var(--line2);border-radius:10px;padding:10px 12px;font-size:12px;line-height:1.6;max-width:330px}
+#gl{cursor:grab}
+.legend.compact .note,.legend.compact .attrib{display:none}
+.legend .lgtog{float:right;background:none;border:0;color:var(--muted);cursor:pointer;font-size:12px}
+@media (max-width:700px){.navctl{bottom:70px}.navctl button{width:42px;height:42px}}
+main:has(#panel:not(.hidden)) .navctl{right:calc(min(560px,100%) + 14px)}
+main:has(#panel:not(.hidden)) .navhelp{right:calc(min(560px,100%) + 62px)}
+@media (max-width:700px){main:has(#panel:not(.hidden)) .navctl,main:has(#panel:not(.hidden)) .navhelp{display:none}}
+.bar{height:8px;border-radius:6px;background:#1a2438;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,#5eead4,#fbbf24)}

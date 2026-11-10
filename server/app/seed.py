@@ -68,6 +68,13 @@ def seed_demo():
         ]
         for u in users:
             c.execute("INSERT INTO users(id,email,name,password_hash,role,partner_id,created_at) VALUES (?,?,?,?,?,?,?)", (*u[:2], u[2], pw, u[3], u[4], ts))
+        # base de serviço e 2 freelancers de demonstração (aparecem como casas perto da base no mapa)
+        c.execute("INSERT INTO service_bases(id,name,state,city,address,location_status,active,created_at,is_demo,lat,lng,geo_source)"
+                  " VALUES ('sb_demo','Base Demo · Guarulhos','SP','Guarulhos',NULL,'nao_confirmada',1,?,1,-23.4543,-46.5337,'informada manualmente')", (ts,))
+        c.execute("UPDATE partner_units SET base_id='sb_demo' WHERE id IN ('uni_pinheiros','uni_campinas')")
+        for uid, email, name in (("usr_tec_rafa", "rafa@freela.demo", "Rafa · freelancer (DEMO)"), ("usr_tec_bia", "bia@freela.demo", "Bia · freelancer (DEMO)")):
+            c.execute("INSERT INTO users(id,email,name,password_hash,role,partner_id,created_at,base_id) VALUES (?,?,?,?,'tecnico',NULL,?,'sb_demo')",
+                      (uid, email, name, pw, ts))
 
         products = [
             ("prd_cafe", "NAT-CAFE-250", "Café Especial Torra Média 250 g", "Grãos arábica, torra média, notas de chocolate."),

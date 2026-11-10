@@ -63,10 +63,22 @@
       <div id="labels"></div>
       <nav class="crumbs" id="crumbs" aria-label="Navegação"></nav>
       <div class="filters" id="filters" aria-label="Filtros"></div>
-      <div class="legend" id="legend">
+      <div class="navctl" id="navctl" role="toolbar" aria-label="Navegação do mapa">
+        <button data-nav="in" title="Aproximar (roda do mouse / duplo clique)" aria-label="Aproximar">+</button>
+        <button data-nav="out" title="Afastar" aria-label="Afastar">−</button>
+        <button data-nav="north" title="Apontar para o norte" aria-label="Norte">N</button>
+        <button data-nav="tilt" title="Alternar vista de cima (2D) / inclinada (3D)" aria-label="2D ou 3D">2D</button>
+        <button data-nav="home" title="Visão geral" aria-label="Visão geral">⌂</button>
+        <button data-nav="help" title="Como usar o mouse" aria-label="Ajuda de navegação">?</button>
+      </div>
+      <div class="navhelp hidden" id="navhelp"><b>Como navegar</b><br>Arrastar: mover o mapa · Roda: zoom no ponto do mouse<br>
+        Botão direito (ou Ctrl + arrastar): girar e inclinar · Duplo clique: aproximar<br>Clique num país, estado, prédio ou rótulo para abrir<br>
+        Teclado: setas movem · + / − zoom · Q / E giram</div>
+      <div class="legend compact" id="legend">
+        <button class="lgtog" id="lgTog" aria-expanded="false" title="Mostrar/ocultar explicação">ⓘ mais</button>
         <div class="row"><span class="st verde"><i></i>sem pendências críticas</span><span class="st amarelo"><i></i>atenção</span><span class="st vermelho"><i></i>crítico</span><span class="st cinza"><i></i>sem dados</span></div>
         <div class="row seg" id="basemapSeg" role="group" aria-label="Tipo de mapa" style="margin:6px 0"><button data-bm="satelite" aria-pressed="false">Satélite</button><button data-bm="ruas" aria-pressed="false">Ruas</button><button data-bm="vetor" aria-pressed="false">Escuro</button></div>
-        <div class="note">Mapa real: imagem de satélite e fronteiras de países e estados; aproxime para ver mais detalhe (ou ruas). Clique num país ou estado para ver as operações. Arraste para girar · botão direito/Shift para mover · roda para aproximar. Posição pela cidade = aproximada; endereço confirmado = exato. Pulsos e movimentos só com eventos reais. Colunas verdes nas unidades = operações feitas em 30 dias; âmbar/vermelho = abertas/atrasadas.</div>
+        <div class="note">Mapa real: imagem de satélite e fronteiras de países e estados; aproxime para ver mais detalhe (ou ruas). Clique num país ou estado para ver as operações. Arraste para mover · botão direito para girar · roda para zoom. Posição pela cidade = aproximada; endereço confirmado = exato. Pulsos e movimentos só com eventos reais. Colunas verdes nas unidades = operações feitas em 30 dias; âmbar/vermelho = abertas/atrasadas.</div>
         <div class="attrib">Satélite: NASA Blue Marble (domínio público) · Ruas: © colaboradores do OpenStreetMap · Fronteiras: Natural Earth</div>
       </div>
     </div>

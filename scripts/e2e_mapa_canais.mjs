@@ -69,6 +69,20 @@ log("operação manual: coordenador executou e entregou o relatório na tarefa")
 await A.screenshot({ path: `${OUT}/m7_operacao_agente.png` });
 await A.click("#closePanel");
 
+// CEO da base, casa do freelancer e fidelidade do cliente
+await A.click("[data-view='3d']");
+await A.fill("#q", "Base Demo"); await A.click("#qres button:has-text('Base · Base Demo')");
+await A.waitForSelector("#ceoBaseRun", { timeout: 15000 }); await A.click("#ceoBaseRun");
+await A.waitForFunction(() => /preventiva\(s\) agendada/.test(document.querySelector("#baseCeo")?.textContent || ""), null, { timeout: 20000 });
+log("CEO da base organizou as tarefas:", (await A.textContent("#baseCeo")).replace(/\s+/g, " ").slice(0, 140));
+await A.screenshot({ path: `${OUT}/m8_ceo_base.png` }); await A.click("#closePanel");
+await A.fill("#q", "Bia"); await A.click("#qres button:has-text('Freelancer · Bia')");
+await A.waitForSelector("#pTitle:has-text('Bia')"); await A.screenshot({ path: `${OUT}/m9_casa_freelancer.png` }); await A.click("#closePanel");
+await A.fill("#q", "Casa Aurora"); await A.click("#qres button:has-text('Parceiro · Casa Aurora')");
+await A.waitForSelector("#pBody h4:has-text('Fidelidade')", { timeout: 10000 });
+log("freelancer (casa) e fidelidade do cliente:", (await A.textContent("#pBody .card:has(.bar)")).replace(/\s+/g, " ").slice(0, 90));
+await A.click("#closePanel");
+
 // Tipo de mapa e saúde do sistema
 await A.click("[data-view='3d']"); await A.click("#basemapSeg [data-bm='ruas']");
 if ((await A.getAttribute("#basemapSeg [data-bm='ruas']", "aria-pressed")) !== "true") throw new Error("seletor de mapa não marcou Ruas");

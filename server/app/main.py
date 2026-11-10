@@ -348,6 +348,16 @@ def _demo_replay(req, p, b):
 
 def _reg(req, p, b): return registry.overview(p)
 def _reg_hq(req, p, b): return registry.save_hq(p, b)
+def _pontos(req, p, b):
+    from . import pontos
+    return pontos.history(p, req.path_params["id"])
+def _pontos_regra(req, p, b):
+    from . import pontos
+    return pontos.set_per_service(p, b.get("por_servico"))
+def _base_ceo(req, p, b):
+    p.require("cadastros.read")   # resumo da base cita unidades de vários clientes: só a central
+    from . import gerente
+    return gerente.last_summary(req.path_params["id"]) or {}
 def _reg_base(req, p, b): return {"id": registry.save_base(p, b, req.path_params.get("id"))}
 def _reg_client(req, p, b): return {"id": registry.save_client(p, b, req.path_params.get("id"))}
 def _reg_unit(req, p, b): return {"id": registry.save_unit(p, b, req.path_params.get("id"))}
@@ -566,6 +576,8 @@ def create_app(**overrides):
     with R.db.tx() as c:
         agents.ensure_agents(c)  # agentes novos entram em bancos já existentes
         ceo.ensure_ceos(c)       # um CEO de IA por parceiro
+        from . import gerente
+        gerente.ensure_base_ceos(c)   # um CEO por base/filial
         channels.ensure_whatsapp_channel(c)
 
     stop = threading.Event()
@@ -614,7 +626,7 @@ def create_app(**overrides):
         Route("/api/saude/erro-tela", client_error, methods=["POST"]),
         Route("/api/geo/imagem/mundo", P(_geo_img_world)), Route("/api/geo/imagem/regiao", P(_geo_img_box)),
         Route("/api/geo/tile/{z:int}/{x:int}/{y:int}", P(_geo_tile)),
-        Route("/api/cadastros", P(_reg)), Route("/api/cadastros/sede", P(_reg_hq), methods=["POST"]),
+        Route("/api/cadastros", P(_reg)), Route("/api/cadastros/sede", P(_reg_hq), methods=["POST"]), Route("/api/partners/{id}/pontos", P(_pontos)), Route("/api/cadastros/pontos", P(_pontos_regra), methods=["POST"]), Route("/api/bases/{id}/ceo", P(_base_ceo)),
         Route("/api/cadastros/bases", P(_reg_base), methods=["POST"]), Route("/api/cadastros/bases/{id}", P(_reg_base), methods=["PUT"]),
         Route("/api/cadastros/clientes", P(_reg_client), methods=["POST"]), Route("/api/cadastros/clientes/{id}", P(_reg_client), methods=["PUT"]),
         Route("/api/cadastros/unidades", P(_reg_unit), methods=["POST"]), Route("/api/cadastros/unidades/{id}", P(_reg_unit), methods=["PUT"]),

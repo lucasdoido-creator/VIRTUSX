@@ -52,6 +52,7 @@ vec2 id=floor(uv/vec2(1.1,1.3));float r=fract(sin(dot(id,vec2(12.9898,78.233)))*
 col=mix(col,uWinColor*(.35+.65*r),w*.8);}
 if(uGrid>.5){vec2 g=abs(fract(vWorld.xz/10.)-.5);float line=1.-smoothstep(0.,.025,min(g.x,g.y));vec2 G=abs(fract(vWorld.xz/60.)-.5);float big=1.-smoothstep(0.,.006,min(G.x,G.y));col+=vec3(.03,.10,.18)*line+vec3(.20,.10,.45)*big;}
 if(uEdge>.5&&abs(n.y)<.5){float e=1.-smoothstep(0.,.35,min(abs(vLocal.y-floor(vLocal.y/6.)*6.),6.));col+=uWinColor*.25*e;}
+if(uUseTex<.5){vec3 V=normalize(uEye-vWorld);vec3 H=normalize(L+V);col+=vec3(1.,.95,.85)*pow(max(dot(n,H),0.),48.)*.30;col+=vec3(.35,.6,1.)*pow(1.-max(dot(n,V),0.),3.)*.22*(1.-abs(n.y));}
 col+=uColor*uEmissive;float d=length(vWorld-uEye);float fog=1.-exp(-pow(d*uFogK,2.));col=mix(col,uFog,clamp(fog,0.,1.));
 gl_FragColor=vec4(col,uAlpha);}`;
 const LVS = `attribute vec3 aPos;uniform mat4 uVP;void main(){gl_Position=uVP*vec4(aPos,1.);}`;
@@ -74,7 +75,7 @@ export class Renderer {
     const gl = canvas.getContext("webgl", { antialias: !this.lite, alpha: false, preserveDrawingBuffer: !!opts.preserve });
     if (!gl) throw new Error("WebGL indisponível");
     this.gl = gl; this.meshes = []; this.lines = []; this.lineSets = []; this.pulses = []; this.dirty = true; this.K = opts.K || 40; this.maxDist = opts.maxDist || 600;
-    this.bg = [0.020, 0.028, 0.070];
+    this.bg = [0.035, 0.060, 0.125];   // céu/horizonte azul-noite (névoa da distância usa a mesma cor)
     this.cam = { tx: 0, ty: 0, tz: 10, dist: 230, yaw: 0.5, pitch: 0.78 };
     this.p = this._prog(VS, FS); this.lp = this._prog(LVS, LFS);
     const c = cube(); this.vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.vb); gl.bufferData(gl.ARRAY_BUFFER, c.pos, gl.STATIC_DRAW);
@@ -161,27 +162,74 @@ export class Renderer {
     }
     return best;
   }
+  // Controles no estilo de mapa: arrastar = mover (o ponto sob o mouse acompanha o mouse);
+  // botão direito, Ctrl ou Shift + arrastar = girar/inclinar; roda = zoom em direção ao cursor; duplo clique = aproximar;
+  // dois dedos = zoom + giro; teclado (com o mapa em foco): setas movem, +/- zoom, Q/E giram, PageUp/PageDown inclinam.
   _controls() {
-    const cv = this.canvas, ptrs = new Map(); let down = null, moved = 0, pinch = null;
+    const cv = this.canvas, ptrs = new Map(); let down = null, moved = 0, two = null, anchor = null;
+    cv.tabIndex = 0; cv.setAttribute("aria-label", "Mapa 3D: arraste para mover, roda para zoom, botão direito para girar");
+    const rel = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+    const changed = () => { this.dirty = true; this.onCamera && this.onCamera(); };
+    const clampPitch = p => Math.min(1.52, Math.max(0.22, p));
+    const gp = (x, y) => { const g = this.groundPoint(x, y);   // ponto perto do horizonte não serve de âncora (salto enorme)
+      return g && Math.hypot(g[0] - this.cam.tx, g[2] - this.cam.tz) < this.cam.dist * 4 ? g : null; };
+    this.clampTarget = () => { const L = 182 * this.K, Lz = 92 * this.K;
+      this.cam.tx = Math.min(L, Math.max(-L, this.cam.tx)); this.cam.tz = Math.min(Lz, Math.max(-Lz, this.cam.tz)); };
+    // zoom mantendo fixo o ponto do chão sob (x, y)
+    this.zoomAt = (factor, x, y) => {
+      const before = x != null ? gp(x, y) : null;
+      this.cam.dist = Math.min(this.maxDist, Math.max(8, this.cam.dist * factor));
+      const after = before ? gp(x, y) : null;
+      if (before && after) { this.cam.tx += before[0] - after[0]; this.cam.tz += before[2] - after[2]; }
+      this.clampTarget(); changed();
+    };
+    this.panBy = (dx, dy) => { const s = this.cam.dist / 700, cy = Math.cos(this.cam.yaw), sy = Math.sin(this.cam.yaw);
+      this.cam.tx -= (dx * cy + dy * sy) * s; this.cam.tz -= (-dx * sy + dy * cy) * s; this.clampTarget(); changed(); };
+    const interact = () => this.onInteract && this.onInteract();   // interrompe voos de câmera em andamento
     cv.addEventListener("contextmenu", e => e.preventDefault());
-    cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, [e.clientX, e.clientY]); down = { x: e.clientX, y: e.clientY, b: e.button }; moved = 0; });
+    cv.addEventListener("pointerdown", e => {
+      interact(); cv.focus({ preventScroll: true }); cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId, rel(e));
+      const rotate = e.button === 2 || e.ctrlKey || e.shiftKey || e.altKey;
+      down = { b: e.button, rotate }; moved = 0;
+      const [x, y] = rel(e); anchor = !rotate ? gp(x, y) : null;
+      if (ptrs.size === 2) { const [p1, p2] = [...ptrs.values()];
+        two = { d: Math.hypot(p1[0] - p2[0], p1[1] - p2[1]), a: Math.atan2(p2[1] - p1[1], p2[0] - p1[0]), c: [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2] }; anchor = null; }
+      cv.style.cursor = rotate ? "grabbing" : "grabbing";
+    });
     cv.addEventListener("pointermove", e => {
       if (!ptrs.has(e.pointerId)) { this.onHover && this.onHover(e); return; }
-      const prev = ptrs.get(e.pointerId); const dx = e.clientX - prev[0], dy = e.clientY - prev[1]; ptrs.set(e.pointerId, [e.clientX, e.clientY]);
+      const prev = ptrs.get(e.pointerId), cur = rel(e); const dx = cur[0] - prev[0], dy = cur[1] - prev[1]; ptrs.set(e.pointerId, cur);
       moved += Math.abs(dx) + Math.abs(dy);
-      if (ptrs.size === 2) { const [p1, p2] = [...ptrs.values()]; const dd = Math.hypot(p1[0] - p2[0], p1[1] - p2[1]);
-        if (pinch) this.cam.dist = Math.min(this.maxDist, Math.max(8, this.cam.dist * pinch / dd)); pinch = dd; }
-      else if (down && (down.b === 2 || e.shiftKey)) { const s = this.cam.dist / 600, cy = Math.cos(this.cam.yaw), sy = Math.sin(this.cam.yaw);
-        this.cam.tx -= (dx * cy + dy * sy) * s; this.cam.tz -= (-dx * sy + dy * cy) * s; }
-      else { this.cam.yaw -= dx * 0.006; this.cam.pitch = Math.min(1.45, Math.max(0.18, this.cam.pitch + dy * 0.005)); }
-      this.dirty = true; this.onCamera && this.onCamera();
+      if (ptrs.size === 2 && two) {   // dois dedos: zoom no centro + giro
+        const [p1, p2] = [...ptrs.values()], d = Math.hypot(p1[0] - p2[0], p1[1] - p2[1]), a = Math.atan2(p2[1] - p1[1], p2[0] - p1[0]);
+        const c = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+        if (d > 0 && two.d > 0) this.zoomAt(two.d / d, c[0], c[1]);
+        this.cam.yaw += a - two.a; this.panBy(c[0] - two.c[0], c[1] - two.c[1]); two = { d, a, c }; return;
+      }
+      if (down.rotate) { this.cam.yaw -= dx * 0.006; this.cam.pitch = clampPitch(this.cam.pitch + dy * 0.005); changed(); return; }
+      const g = anchor && gp(cur[0], cur[1]);
+      if (anchor && g) { this.cam.tx += anchor[0] - g[0]; this.cam.tz += anchor[2] - g[2]; this.clampTarget(); changed(); }
+      else this.panBy(dx, dy);    // acima do horizonte: movimento proporcional
     });
-    const up = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = null;
-      if (down && moved < 6 && e.type === "pointerup") { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    const up = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) two = null; cv.style.cursor = "";
+      if (down && moved < 6 && e.type === "pointerup" && e.button === 0) { const [x, y] = rel(e);
         this.onClick && this.onClick(this.pick(x, y), this.groundPoint(x, y)); }
-      if (!ptrs.size) down = null; };
+      if (!ptrs.size) { down = null; anchor = null; } };
     cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
-    cv.addEventListener("wheel", e => { e.preventDefault(); this.cam.dist = Math.min(this.maxDist, Math.max(8, this.cam.dist * (e.deltaY > 0 ? 1.12 : 0.89))); this.dirty = true; this.onCamera && this.onCamera(); }, { passive: false });
+    cv.addEventListener("wheel", e => { e.preventDefault(); interact(); const [x, y] = rel(e);
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;   // linhas → pixels; touchpad dá passos pequenos e suaves
+      this.zoomAt(Math.exp(Math.max(-0.5, Math.min(0.5, dy * 0.0018))), x, y); }, { passive: false });
+    cv.addEventListener("dblclick", e => { e.preventDefault(); interact(); const [x, y] = rel(e); this.zoomAt(e.shiftKey ? 2 : 0.45, x, y); });
+    cv.addEventListener("keydown", e => {
+      const k = e.key, st = 60; let used = true; interact();
+      if (k === "ArrowLeft") this.panBy(st, 0); else if (k === "ArrowRight") this.panBy(-st, 0);
+      else if (k === "ArrowUp") this.panBy(0, st); else if (k === "ArrowDown") this.panBy(0, -st);
+      else if (k === "+" || k === "=") this.zoomAt(0.8); else if (k === "-" || k === "_") this.zoomAt(1.25);
+      else if (k === "q" || k === "Q") { this.cam.yaw += 0.15; changed(); } else if (k === "e" || k === "E") { this.cam.yaw -= 0.15; changed(); }
+      else if (k === "PageUp") { this.cam.pitch = clampPitch(this.cam.pitch + 0.1); changed(); } else if (k === "PageDown") { this.cam.pitch = clampPitch(this.cam.pitch - 0.1); changed(); }
+      else used = false;
+      if (used) e.preventDefault();
+    });
   }
   _frame(t) {
     if (!this.dirty && !this.pulses.length && !this.animating) return;

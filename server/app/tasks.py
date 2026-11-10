@@ -217,6 +217,9 @@ def update_task(c, actor: Principal, task_id, changes: dict, note=None, force=Fa
         return t
     if sets:
         c.execute(f"UPDATE tasks SET {', '.join(sets)}, updated_at=? WHERE id=?", (*vals, ts, task_id))
+    if new_status == "concluida" and t["status"] != "concluida":
+        from . import pontos
+        pontos.award(c, t)   # cashback do cliente: uma vez por serviço
     if note:
         c.execute("INSERT INTO task_comments(id,task_id,author,body,created_at) VALUES (?,?,?,?,?)",
                   (new_id("cmt"), task_id, actor.label, note, ts))

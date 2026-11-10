@@ -79,7 +79,10 @@ def world(actor: Principal):
         " SUM(status NOT IN ('concluida','cancelada') AND due_at IS NOT NULL AND due_at<?) atrasadas,"
         " SUM(status='concluida' AND completed_at>=?) feitas_30d, MAX(CASE WHEN status='concluida' THEN completed_at END) ultima"
         " FROM tasks WHERE unit_id IS NOT NULL GROUP BY unit_id", tsn, since)}
+    from . import pontos
+    fid = pontos.summary_by_partner()
     for p in partners:
+        p["fidelidade"] = fid.get(p["id"], {"pontos": 0, "servicos": 0, "nivel": 1, "proximo_nivel_em": pontos.LEVELS[1]})
         p["units"] = R.db.all("SELECT * FROM partner_units WHERE partner_id=?", p["id"])
         for u in p["units"]:   # operações realizadas e em aberto por unidade (aparece no mapa)
             o = ops_by_unit.get(u["id"]) or {}
@@ -106,6 +109,15 @@ def world(actor: Principal):
         b["units"] = R.db.all("SELECT id, partner_id FROM partner_units WHERE base_id=? AND active=1", b["id"])
         b["tecnicos"] = R.db.val("SELECT COUNT(*) FROM users WHERE base_id=? AND role='tecnico' AND active=1", b["id"])
         b["pendentes"] = R.db.val("SELECT COUNT(*) FROM users WHERE base_id=? AND role='tecnico' AND active=0", b["id"])
+        since30 = iso(now() - timedelta(days=30))
+        b["freelancers"] = R.db.all(   # casas no mapa (posição ilustrativa perto da base: não é rastreamento)
+            "SELECT u.id, u.name, u.active, (SELECT COUNT(*) FROM tasks t WHERE t.assignee_type='humano' AND t.assignee_id=u.id "
+            "AND t.status NOT IN ('concluida','cancelada')) abertas, (SELECT COUNT(*) FROM tasks t WHERE t.assignee_type='humano' "
+            "AND t.assignee_id=u.id AND t.status='concluida' AND t.completed_at>=?) feitas_30d FROM users u "
+            "WHERE u.base_id=? AND u.role='tecnico' ORDER BY u.name", since30, b["id"])
+        from . import gerente
+        g = gerente.last_summary(b["id"])
+        b["ceo"] = {"resumo": g["resumo"], "em": g["em"]} if g else None
     from . import geo
     return {
         "hq": _hq(actor),
