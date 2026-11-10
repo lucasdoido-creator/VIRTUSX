@@ -13,7 +13,7 @@ await A.waitForSelector("#expBox summary", { timeout: 15000 }); await A.click("#
 if ((await A.inputValue("#mktForm [name=lang]")) !== "pt-PT" || (await A.inputValue("#mktForm [name=currency]")) !== "EUR") throw new Error("idioma/moeda não vieram do catálogo");
 await A.fill("#mktForm [name=brand]", "VirtusX TI"); await A.fill("#mktForm [name=offer]", "Suporte de TI remoto e manutenção preventiva para pequenas empresas");
 await A.fill("#mktForm [name=email]", "contato@virtusx.example"); await A.fill("#mktForm [name=price]", "39");
-await A.click("#mktForm button.primary"); await A.waitForSelector("#pTitle:has-text('Portugal')", { timeout: 15000 });
+await A.click("#mktForm button.primary"); await A.waitForSelector("#pTitle:has-text('🌐 Portugal')", { timeout: 30000 });
 log("mercado criado pela tela: Portugal · pt-PT · EUR");
 // 2. CEO e agentes trabalham (aqui disparados direto, como o agendador faria)
 const mk = (await api("/api/mercados")).data.find(m => m.country === "Portugal");
