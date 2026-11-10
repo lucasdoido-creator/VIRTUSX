@@ -672,6 +672,8 @@ async function openMarket(id) {
       ${pub ? badge("publicação: " + (pub.status === "aguardando_aprovacao" ? "aguardando sua aprovação" : pub.status), pub.status === "executada" ? "ok" : "warn") : ""}
       ${pub && pub.status === "aguardando_aprovacao" ? `<button class="btn small" id="mkAppr">Aprovações</button>` : ""}</div>
     ${m.site_published ? `<p class="muted">Endereço: <span class="mono">${esc(m.url)}</span>. Para o Google indexar, o servidor precisa de um endereço público (domínio ou túnel HTTPS) — configure PUBLIC_BASE_URL.</p>` : ""}
+    ${funilHtml(m.funil)}
+    <h4>Leads (contatos do site)</h4><div id="mkLeads"><p class="muted">Carregando…</p></div>
     <h4>Setores</h4><table class="t"><tbody>${m.tarefas.map(t => `<tr class="click" data-task="${t.id}"><td>${esc(SETOR_LBL[t.related_entity.split(":")[2]] || t.related_entity.split(":")[2])}</td>
       <td>${esc(t.title)}</td><td>${badge(TASK_STATES[t.status] || t.status, t.status === "concluida" ? "ok" : "")}</td></tr>`).join("") || `<tr><td class="muted">O CEO ainda está planejando…</td></tr>`}</tbody></table>
     ${est ? `<h4>Estratégia <span class="muted">(${esc(est.body.fonte)})</span></h4><p>${esc(est.body.resumo)}</p>
@@ -685,7 +687,28 @@ async function openMarket(id) {
       <dt>Imposto</dt><dd>${esc(fin.body.imposto)}</dd><dt>Pagamentos comuns</dt><dd>${esc(fin.body.pagamentos_comuns)}</dd></dl><p class="muted">${esc(fin.body.aviso)}</p>` : ""}` });
   $("#pBody").querySelectorAll("[data-task]").forEach(el => el.onclick = () => openTask(el.dataset.task));
   const r = $("#mkRun"); if (r) r.onclick = () => act(() => api(`/api/agents/mkt_${id}/run`, { method: "POST" }), "CEO do mercado executou");
+  if (can("leads.read")) api(`/api/leads?market_id=${id}`).then(ls => { const el = $("#mkLeads"); if (el) { el.innerHTML = leadsTable(ls); bindLeads(el); } }).catch(() => {});
   const ap = $("#mkAppr"); if (ap) ap.onclick = () => { closePanel(); S.tab = "aprovacoes"; setView("tabelas"); };
+}
+const LEAD_ST = { novo: "novo", contatado: "contatado", proposta: "proposta enviada", ganho: "ganho ✓", perdido: "perdido" };
+function funilHtml(f) {
+  if (!f) return "";
+  const pct = v => v == null ? "—" : v + "%";
+  return `<h4>Funil (últimos ${f.dias} dias)</h4><div class="row" style="gap:10px;flex-wrap:wrap">
+    ${[["Visitas no site", f.visitas], ["Leads", f.leads], ["Ganhos", f.ganhos], ["Visita → lead", pct(f.conversao_visita_lead)], ["Lead → ganho", pct(f.conversao_lead_ganho)]]
+      .map(([k, v]) => `<div class="card" style="min-width:110px;text-align:center"><div class="muted">${k}</div><div style="font-size:22px;font-weight:700">${esc(String(v))}</div></div>`).join("")}</div>
+    ${f.origens.length ? `<div class="muted">Origem dos leads: ${f.origens.map(o => `${esc(o.origem)} (${o.n})`).join(" · ")}</div>` : `<div class="muted">Dica: use links com ?utm_source=google&utm_campaign=nome nos anúncios para saber de onde vêm os clientes.</div>`}`;
+}
+function leadsTable(ls) {
+  if (!ls.length) return `<p class="muted">Nenhum lead ainda. O formulário "Peça seu orçamento" fica no site publicado.</p>`;
+  return `<table class="t"><thead><tr><th>Quando</th><th>País</th><th>Nome</th><th>Contato</th><th>Origem</th><th>Situação</th></tr></thead><tbody>${ls.map(l => `<tr>
+    <td>${fmtTime(l.created_at)}</td><td>${esc(l.country)}</td><td><b>${esc(l.name)}</b>${l.message ? `<div class="muted">${esc(l.message.slice(0, 140))}</div>` : ""}</td>
+    <td>${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ""}${l.phone ? `<div class="mono">${esc(l.phone)}</div>` : ""}</td>
+    <td>${esc(l.utm_source || "direto")}${l.utm_campaign ? `<div class="muted">${esc(l.utm_campaign)}</div>` : ""}</td>
+    <td>${can("leads.write") ? `<select data-lead="${l.id}">${Object.entries(LEAD_ST).map(([k, v]) => `<option value="${k}" ${k === l.status ? "selected" : ""}>${v}</option>`).join("")}</select>` : esc(LEAD_ST[l.status])}</td></tr>`).join("")}</tbody></table>`;
+}
+function bindLeads(el) {
+  el.querySelectorAll("[data-lead]").forEach(sel => sel.onchange = () => act(() => api(`/api/leads/${sel.dataset.lead}`, { method: "PATCH", body: { status: sel.value } }), "Lead atualizado"));
 }
 function fidelidadeHtml(pid) {
   const p = (S.world.partners || []).find(x => x.id === pid); const f = p && p.fidelidade; if (!f) return "";
@@ -745,7 +768,7 @@ async function openSector(code) {
 }
 
 // ------------------------------------------------------------------ modo tabelas
-const TABLE_TABS = [["quadro", "Quadro de tarefas"], ["atendimento", "Atendimento"], ["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
+const TABLE_TABS = [["leads", "Leads"], ["quadro", "Quadro de tarefas"], ["atendimento", "Atendimento"], ["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
   ["aprovacoes", "Aprovações"], ["estoque", "Estoque"], ["eventos", "Eventos"], ["webhooks", "Webhooks"], ["auditoria", "Auditoria"], ["politicas", "Políticas"]];
 async function renderTables(soft, auto = false) {
   // Só a chamada mais recente desenha (uma resposta lenta e antiga nunca cobre dados novos);
@@ -754,7 +777,7 @@ async function renderTables(soft, auto = false) {
   const fresh = () => seq === S.tSeq && !(auto && editing("#tBody"));
   const get = async (url, opts) => { const d = await api(url, opts); if (!fresh()) throw STALE; return d; };
   const tabs = S.me.role === "tecnico" ? [["tarefas", "Minhas tarefas"]] :
-    TABLE_TABS.filter(([k]) => (k === "atendimento" ? can("atendimento.read") : (S.me.is_central && (k !== "cadastros" || can("cadastros.read")))
+    TABLE_TABS.filter(([k]) => (k === "leads" ? can("leads.read") : k === "atendimento" ? can("atendimento.read") : (S.me.is_central && (k !== "cadastros" || can("cadastros.read")))
       || ["quadro", "visao", "pedidos", "tarefas", "agentes", "fechamentos", "eventos"].includes(k)));
   $("#tTabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" aria-selected="${k === S.tab}" data-t="${k}">${v}</button>`).join("");
   $("#tTabs").querySelectorAll("button").forEach(b => b.onclick = () => { S.tab = b.dataset.t; $("#tFilter").value = ""; renderTables(); });
@@ -771,6 +794,7 @@ async function renderTables(soft, auto = false) {
   try {
     if (S.tab === "cadastros") return renderCadastros(body, fresh);
     if (S.tab === "quadro") return renderKanban(body, fresh);
+    if (S.tab === "leads") { const ls = await get("/api/leads"); body.innerHTML = `<p class="muted">Contatos vindos dos sites de cada país. Mude a situação conforme o atendimento avança.</p>` + leadsTable(ls); bindLeads(body); return; }
     if (S.tab === "atendimento") return renderInbox(body, fresh);
     if (S.tab === "visao") grid([["name", "Parceiro"], ["region", "Região"], ["status", "Sinalização", r => st(r.status)], ["model", "Modelo"], ["overdue_tasks", "Tarefas atrasadas"],
       ["pending_closings", "Fechamentos pendentes"], ["failed_integrations", "Integrações com falha"], ["sales", "Vendas confirmadas"], ["is_demo", "Ambiente", r => r.is_demo ? badge("demo", "sim") : ""]],
@@ -820,6 +844,7 @@ async function renderCadastros(body, fresh) {
   body.innerHTML = `
   ${pend.length ? `<div class="card"><h4>Freelancers aguardando sua autorização (${pend.length})</h4>${pend.map(u => `<div class="row">${esc(u.name)} · ${esc(u.email)} · base ${esc(u.base_name || "—")}
     ${w ? `<button class="btn small primary" data-auth="${u.id}">Autorizar</button>` : ""}</div>`).join("")}</div>` : ""}
+  ${can("mercados.write") ? `<div class="card" id="brandCard"><h4>Identidade visual (todos os sites)</h4><p class="muted">Carregando…</p></div>` : ""}
   <div class="card"><h4>Sede · administração central</h4>
     <p class="muted">Posição atual no mapa: ${d.sede.padrao ? badge("padrão — informe a sua sede", "warn") : `${esc(d.sede.city || "")} ${locBadge(d.sede)}`}</p>
     ${w ? `<form class="f" data-form="sede"><div class="row"><label>Nome<input name="name" value="${esc(d.sede.name || "Administração central")}"></label>
@@ -869,6 +894,24 @@ async function renderCadastros(body, fresh) {
       <label>Base (p/ técnico)<select name="base_id"><option value="">—</option>${opt(d.bases, null, b => b.name)}</select></label>
       <label>Senha (mín. 10; em edição, só se for trocar)<input name="password" type="password" minlength="10" autocomplete="new-password"></label>
       <label class="row"><input type="checkbox" name="active" checked> ativo/autorizado</label><button class="btn primary small">Salvar acesso</button></div></form>` : ""}</div>`;
+  if (can("mercados.write")) api("/api/marca").then(b => { const el = body.querySelector("#brandCard"); if (!el) return;
+    const FN = { system: "Moderna (sistema)", serif: "Clássica (serifa)", rounded: "Arredondada", mono: "Técnica (mono)" };
+    el.innerHTML = `<h4>Identidade visual (todos os sites)</h4><p class="muted">Aplicada automaticamente nos sites de cada país: cores, fonte, nome e slogan.</p>
+      <form class="f" id="brandForm"><div class="row"><label>Nome da marca<input name="nome" value="${esc(b.nome)}" maxlength="120"></label>
+      <label>Slogan<input name="slogan" value="${esc(b.slogan)}" maxlength="120"></label><label>Tom de voz<input name="tom" value="${esc(b.tom)}" maxlength="120"></label></div>
+      <div class="row"><label>Cor principal<input type="color" name="cor_primaria" value="${esc(b.cor_primaria)}"></label>
+      <label>Cor secundária<input type="color" name="cor_secundaria" value="${esc(b.cor_secundaria)}"></label>
+      <label>Cor de destaque (botões)<input type="color" name="cor_destaque" value="${esc(b.cor_destaque)}"></label>
+      <label>Fonte<select name="fonte">${Object.entries(FN).map(([k, v]) => `<option value="${k}" ${k === b.fonte ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <div id="brandPrev" style="min-width:220px;border-radius:12px;padding:12px;color:#fff"></div></div>
+      <button class="btn primary small">Salvar identidade</button></form>`;
+    const f = el.querySelector("#brandForm"), pv = el.querySelector("#brandPrev");
+    const paint = () => { pv.style.background = `linear-gradient(135deg,${f.cor_primaria.value},${f.cor_secundaria.value})`;
+      pv.innerHTML = `<b>${esc(f.nome.value || "Sua marca")}</b><div style="opacity:.9">${esc(f.slogan.value || "")}</div><span style="display:inline-block;margin-top:6px;background:${f.cor_destaque.value};color:#111;padding:4px 10px;border-radius:8px;font-weight:700">Peça seu orçamento</span>`; };
+    f.oninput = paint; paint();
+    f.onsubmit = async e => { e.preventDefault(); const d = Object.fromEntries(new FormData(f).entries());
+      await act(() => api("/api/marca", { method: "POST", body: d }), "Identidade visual salva — sites de todos os países atualizados"); };
+  }).catch(() => {});
   const ROUTE = { base: "bases", client: "clientes", unit: "unidades", user: "usuarios", sede: "sede" };
   const ctf = body.querySelector("form[data-form=contact]"); if (ctf) { ctf.removeAttribute("data-form"); ctf.onsubmit = async e => { e.preventDefault(); const f = new FormData(ctf);
     await act(() => api("/api/contacts", { method: "POST", body: { partner_id: f.get("partner_id"), name: f.get("name"), phone: f.get("phone"), role: f.get("role") } }), "Contato salvo"); renderTables(); }; }

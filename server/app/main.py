@@ -466,10 +466,43 @@ async def market_page(req):
         prev = pr if pr.can("mercados.read") else None
     except AppError:
         prev = None
-    html_ = await run_in_threadpool(mercados.render_site, req.path_params["slug"], prev)
+    qp_ = req.query_params
+    state = "ok" if qp_.get("obrigado") else ("erro" if qp_.get("erro") else "")
+    utm = {k: qp_.get(k) for k in ("utm_source", "utm_medium", "utm_campaign") if qp_.get(k)}
+    html_ = await run_in_threadpool(mercados.render_site, req.path_params["slug"], prev, state, utm)
     if html_ is None:
         return Response("Página não encontrada", status_code=404, media_type="text/plain; charset=utf-8")
     return Response(html_, media_type="text/html; charset=utf-8")
+
+
+async def market_lead(req):
+    """Formulário do site do país (HTML puro): grava o lead e volta para a página com a mensagem."""
+    from . import vitrine
+    from starlette.responses import RedirectResponse
+    slug = req.path_params["slug"]
+    raw = (await req.body())[:20000]
+    from urllib.parse import parse_qs
+    form = {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
+    try:
+        res = await run_in_threadpool(vitrine.capture_lead, slug, form, req.client.host if req.client else "?")
+    except NotFound:
+        return Response("Página não encontrada", status_code=404, media_type="text/plain; charset=utf-8")
+    q = "obrigado=1" if res in ("ok", "spam") else "erro=1"
+    return RedirectResponse(f"/m/{slug}?{q}#orcamento", status_code=303)
+
+
+def _marca_get(req, p, b):
+    from . import vitrine
+    return vitrine.get_brand()
+def _marca_set(req, p, b):
+    from . import vitrine
+    return vitrine.save_brand(p, b)
+def _leads(req, p, b):
+    from . import vitrine
+    return vitrine.list_leads(p, qp(req, "market_id"))
+def _lead_status(req, p, b):
+    from . import vitrine
+    return vitrine.set_lead_status(p, req.path_params["id"], b.get("status"))
 
 
 async def sitemap_xml(req):
@@ -690,7 +723,9 @@ def create_app(**overrides):
         Route("/api/sistema/chave-monitor", P(_chave_monitor), methods=["POST"]), Route("/api/monitor", P(_monitor)),
         Route("/api/paises/{nome}", P(_pais)), Route("/api/mercados", P(_mercados)), Route("/api/mercados", P(_mercado_new), methods=["POST"]),
         Route("/api/mercados/{id}", P(_mercado)),
-        Route("/m/{slug}", market_page), Route("/sitemap.xml", sitemap_xml), Route("/robots.txt", robots_txt), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
+        Route("/m/{slug}", market_page), Route("/m/{slug}/lead", market_lead, methods=["POST"]),
+        Route("/api/marca", P(_marca_get)), Route("/api/marca", P(_marca_set), methods=["POST"]),
+        Route("/api/leads", P(_leads)), Route("/api/leads/{id}", P(_lead_status), methods=["PATCH"]), Route("/sitemap.xml", sitemap_xml), Route("/robots.txt", robots_txt), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
         Route("/api/saude/erro-tela", client_error, methods=["POST"]),
         Route("/api/geo/imagem/mundo", P(_geo_img_world)), Route("/api/geo/imagem/regiao", P(_geo_img_box)),
         Route("/api/geo/tile/{z:int}/{x:int}/{y:int}", P(_geo_tile)),

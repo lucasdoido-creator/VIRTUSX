@@ -101,7 +101,7 @@ def scrub(text: str) -> str:
 ROLE_PERMS = {
     "admin_central": {"*"},
     "operacoes_central": {
-        "ventures.read", "cadastros.read", "atendimento.read", "atendimento.send", "comandos.run", "sistema.saude", "mercados.read",
+        "ventures.read", "cadastros.read", "atendimento.read", "atendimento.send", "comandos.run", "sistema.saude", "mercados.read", "leads.read", "leads.write",
         "orders.read", "orders.read_pii", "orders.cancel", "shipments.create", "inventory.read",
         "partners.read", "tasks.read", "tasks.write", "agents.read", "agents.run", "events.read",
         "closings.read", "apps.read", "storefronts.read", "returns.create", "audit.read",

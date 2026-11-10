@@ -353,6 +353,13 @@ CREATE TABLE IF NOT EXISTS markets (
 );
 CREATE TABLE IF NOT EXISTS market_items (id TEXT PRIMARY KEY, market_id TEXT NOT NULL REFERENCES markets(id), kind TEXT NOT NULL, title TEXT NOT NULL,
   body_json TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS market_views (market_id TEXT NOT NULL, day TEXT NOT NULL, views INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (market_id, day));
+CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY, market_id TEXT NOT NULL REFERENCES markets(id), name TEXT NOT NULL, email TEXT, phone TEXT, message TEXT,
+  consent_at TEXT NOT NULL, utm_source TEXT, utm_medium TEXT, utm_campaign TEXT, lang TEXT,
+  status TEXT NOT NULL CHECK (status IN ('novo','contatado','proposta','ganho','perdido')), created_at TEXT NOT NULL, updated_at TEXT,
+  ip_hash TEXT, is_demo INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS monitor_findings (id TEXT PRIMARY KEY, code TEXT NOT NULL, severity TEXT NOT NULL, title TEXT NOT NULL, detail TEXT,
   first_at TEXT NOT NULL, last_at TEXT NOT NULL, resolved_at TEXT, proposal TEXT);
 CREATE TABLE IF NOT EXISTS loyalty_points (id TEXT PRIMARY KEY, partner_id TEXT NOT NULL, task_id TEXT NOT NULL UNIQUE, points INTEGER NOT NULL, reason TEXT, created_at TEXT NOT NULL);

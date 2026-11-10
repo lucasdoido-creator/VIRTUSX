@@ -155,6 +155,8 @@ def get_market(actor: Principal, mid):
     m["publicacao"] = R.db.one("SELECT id, status, created_at FROM action_requests WHERE action='mercado.publicar_site' AND payload_json LIKE ? "
                                "ORDER BY created_at DESC LIMIT 1", f'%"market_id": "{mid}"%')
     m["url"] = public_url(m)
+    from . import vitrine
+    m["funil"] = vitrine.funnel(mid)
     return m
 
 
@@ -399,38 +401,20 @@ def _esc(s):
     return html.escape(str(s or ""), quote=True)
 
 
-def render_site(slug, preview_actor=None):
-    m = R.db.one("SELECT id FROM markets WHERE slug=?", slug)
-    if not m:
+def render_site(slug, preview_actor=None, state="", utm=None):
+    """Site do país com identidade visual, captação de leads e SEO. Visitas contadas só no site publicado (não na prévia)."""
+    from . import vitrine
+    row = R.db.one("SELECT id FROM markets WHERE slug=?", slug)
+    if not row:
         return None
-    m = _row(m["id"])
+    m = _row(row["id"])
     if not m["site"] or (not m["site_published"] and preview_actor is None):
         return None
-    s = m["site"]
-    others = R.db.all("SELECT slug, lang FROM markets WHERE site_published=1 AND status!='encerrado'")
+    if m["site_published"] and preview_actor is None and not state:
+        vitrine.count_view(m["id"])
     base = public_url({"slug": ""}).rsplit("/m/", 1)[0]
-    alts = "".join(f'<link rel="alternate" hreflang="{_esc(o["lang"])}" href="{_esc(base)}/m/{_esc(o["slug"])}">' for o in others)
-    ld = {"@context": "https://schema.org", "@type": "Organization", "name": s["marca"], "url": f"{base}/m/{slug}",
-          "areaServed": s["pais"], "availableLanguage": s["lang"], "description": s["descricao"]}
-    if s.get("email"):
-        ld["contactPoint"] = {"@type": "ContactPoint", "email": s["email"], "contactType": "customer service", "areaServed": m["iso2"] or s["pais"]}
-    price = f'<p class="price">{_esc(s["a_partir"])} <b>{_esc(s["preco"])} {_esc(s["moeda"])}</b></p>' if s.get("preco") else f'<p class="price">{_esc(s["precos"])}</p>'
-    contact = " · ".join(x for x in [f'<a href="mailto:{_esc(s["email"])}">{_esc(s["email"])}</a>' if s.get("email") else "",
-                                     f'<a href="https://wa.me/{_esc(re.sub(r"[^0-9]", "", s["whatsapp"]))}">WhatsApp</a>' if s.get("whatsapp") else ""] if x)
-    faq = "".join(f"<details><summary>{_esc(f['p'])}</summary><p>{_esc(f['r'])}</p></details>" for f in s.get("faq") or [])
-    banner = "" if m["site_published"] else '<div class="pv">PRÉVIA — não publicado</div>'
-    return f"""<!DOCTYPE html><html lang="{_esc(s['lang'])}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{_esc(s['titulo'])}</title><meta name="description" content="{_esc(s['descricao'])}">
-<link rel="canonical" href="{_esc(base)}/m/{_esc(slug)}">{alts}{'' if m['site_published'] else '<meta name="robots" content="noindex">'}
-<script type="application/ld+json">{json.dumps(ld, ensure_ascii=False).replace("</", "<\\/")}</script>
-<style>body{{font-family:system-ui,sans-serif;margin:0;color:#0f172a;background:#f8fafc}}header,main,footer{{max-width:880px;margin:auto;padding:24px}}
-h1{{font-size:2rem;margin:.2em 0}}.hero{{background:linear-gradient(135deg,#0f766e,#1e3a8a);color:#fff}}.hero p{{opacity:.9}}.cta{{display:inline-block;background:#fbbf24;color:#111;
-padding:10px 18px;border-radius:10px;text-decoration:none;font-weight:600}}.price{{font-size:1.1rem}}li{{margin:.4em 0}}.pv{{background:#b91c1c;color:#fff;text-align:center;padding:6px}}
-small{{color:#64748b}}details{{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;margin:6px 0}}</style></head><body>{banner}
-<div class="hero"><header><small>{_esc(s['remoto'])}</small><h1>{_esc(s['titulo'])}</h1><p>{_esc(s['chamada'])}</p>
-{f'<a class="cta" href="mailto:{_esc(s["email"])}">{_esc(s["cta"])}</a>' if s.get('email') else ''}</header></div>
-<main><p>{_esc(s['sobre'])}</p><h2>{_esc(s['servicos_titulo'])}</h2><ul>{''.join(f'<li>{_esc(x)}</li>' for x in s['servicos'])}</ul>{price}{faq}</main>
-<footer><h3>{_esc(s['contato'])}</h3><p>{contact}</p><small>{_esc(s['marca'])} · {_esc(s['remoto'])}</small></footer></body></html>"""
+    others = R.db.all("SELECT slug, lang FROM markets WHERE site_published=1 AND status!='encerrado'")
+    return vitrine.page(m, base, others, bool(m["site_published"]), state, utm)
 
 
 def sitemap():

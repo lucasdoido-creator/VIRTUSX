@@ -260,6 +260,14 @@ Dica: para precisão total, copie as coordenadas do Google Maps (clique direito 
 
 **Login protegido**: após 10 senhas erradas em 5 min do mesmo endereço, bloqueio de 5 min; tentativas contam para o Sentinela.
 
+## 7.9 Negócio profissional: identidade visual, conversão e captação
+
+- **Identidade visual** (Cadastros → Identidade visual, administrador): nome da marca, slogan, tom, 3 cores (principal, secundária, destaque dos botões) e fonte, com prévia. Aplicada em todos os sites de país.
+- **Site de alta conversão** (cada país): chamada clara, benefícios, "como funciona" em 3 passos, preço, perguntas frequentes (com dados estruturados para o Google), formulário "Peça seu orçamento", botão fixo de WhatsApp, Open Graph para compartilhar. Sem scripts (rápido e seguro), funciona no celular. Nada inventado: sem depoimentos, números ou selos falsos.
+- **Captação**: formulário com **consentimento obrigatório** (LGPD/GDPR), anti-spam (campo isca + no máximo 5 envios por endereço a cada 10 min), origem do anúncio (`utm_source`, `utm_campaign`). Cada lead vira tarefa "responder em 24 h"; o evento não leva dados pessoais. Parceiros não veem leads.
+- **Funil por país** (painel do país): visitas do site (contadas no servidor, sem cookies; a prévia não conta) → leads → ganhos, conversões e origens. **Tabelas → Leads**: todos os leads, com situação (novo, contatado, proposta, ganho, perdido).
+- Dica: nos anúncios use links como `https://seu-dominio/m/<pais>?utm_source=google&utm_campaign=lancamento`.
+
 ## 8. Como executar e acessar
 
 **Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
@@ -279,7 +287,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **108 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`, `test_mercados_monitor`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **112 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`, `test_mercados_monitor`, `test_vitrine`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

@@ -33,8 +33,22 @@ await api(`/api/approvals/${m.publicacao.id}/decide`, { method: "POST", body: JS
 const pub = await fetch(`${BASE}/m/${m.slug}`); const html = await pub.text();
 if (pub.status !== 200 || !html.includes('hreflang="pt-PT"') || html.includes("noindex")) throw new Error("site publicado incorreto");
 if (!(await (await fetch(`${BASE}/sitemap.xml`)).text()).includes(m.slug)) throw new Error("sitemap sem o país");
-const P = await ctx.newPage(); await P.goto(`${BASE}/m/${m.slug}`); await P.screenshot({ path: `${OUT}/x2_site_portugal.png`, fullPage: true }); await P.close();
+const vis = await b.newContext({ viewport: { width: 1280, height: 900 } }); const P = await vis.newPage();   // visitante (sem login)
+await P.goto(`${BASE}/m/${m.slug}?utm_source=google&utm_campaign=lancamento`); await P.screenshot({ path: `${OUT}/x2_site_portugal.png`, fullPage: true });
+await P.fill("[name=nome]", "Rita Sousa"); await P.fill("[name=email]", "rita@exemplo.pt"); await P.fill("[name=mensagem]", "Preciso de suporte para 5 computadores");
+await P.check("[name=consentimento]"); await P.click("#orcamento button[type=submit]");
+await P.waitForSelector(".note.ok", { timeout: 10000 }); await vis.close();
+const leads = (await api(`/api/leads?market_id=${m.id}`)).data;
+if (leads.length !== 1 || leads[0].utm_source !== "google") throw new Error("lead não captado com origem: " + JSON.stringify(leads));
+log("visitante pediu orçamento no site: lead captado com origem google/lancamento e tarefa criada");
 log("site do país: prévia só para a equipe; publicado após aprovação, com hreflang e sitemap");
+await A.click("#closePanel").catch(() => {}); await A.fill("#q", "Portugal"); await A.click("#qres button:has-text('Mercado · Portugal')");
+await A.waitForSelector("#mkLeads td:has-text('Rita Sousa')", { timeout: 15000 });
+await A.selectOption(`#mkLeads [data-lead="${leads[0].id}"]`, "ganho"); await A.waitForTimeout(1500);
+const f = (await api(`/api/mercados/${m.id}`)).data.funil;
+if (f.ganhos !== 1 || f.visitas < 1) throw new Error("funil incorreto: " + JSON.stringify(f));
+await A.screenshot({ path: `${OUT}/x4_funil.png` });
+log(`funil: ${f.visitas} visita(s) → ${f.leads} lead(s) → ${f.ganhos} ganho(s)`);
 // 4. torre no mapa e Sentinela
 await A.click("#closePanel"); await A.fill("#q", "Portugal"); await A.click("#qres button:has-text('Mercado · Portugal')");
 await A.waitForSelector("#pTitle:has-text('Portugal')"); await A.click("#closePanel");
