@@ -42,7 +42,10 @@ await M.page.fill("#ideaForm [name=idea]", "Kit presente corporativo com café e
 await M.page.fill("#ideaForm [name=keywords]", "presente corporativo café");
 await M.page.click("#ideaForm button.primary");
 await M.page.waitForFunction(() => (document.querySelector("#pBody")?.textContent || "").includes("presente corporativo") &&
-  [...document.querySelectorAll("#pBody .card")].some(c => c.textContent.includes("presente corporativo") && c.textContent.includes("em execução")), null, { timeout: 60000 });
+  [...document.querySelectorAll("#pBody .card")].some(c => c.textContent.includes("presente corporativo") && c.textContent.includes("em execução")), null, { timeout: 60000 }).catch(async e => {
+    console.log("diag diretoria:", await M.page.evaluate(() => JSON.stringify({ ativo: document.activeElement && (document.activeElement.tagName + "#" + document.activeElement.id + "[" + (document.activeElement.name || "") + "]"),
+      sujos: [...document.querySelectorAll("#pBody form input, #pBody form textarea")].filter(i => !["checkbox", "hidden", "file", "radio"].includes(i.type) && i.value !== i.defaultValue).map(i => i.name),
+      texto: (document.querySelector("#pBody")?.textContent || "").slice(0, 600) }))); throw e; });
 const staff = await M.page.$$eval("#pBody .card", cs => (cs.find(c => c.textContent.includes("presente corporativo")) || {}).textContent || "");
 log("CEO planejou a ideia; equipe contratada grátis:", /Equipe contratada/.test(staff));
 await M.page.screenshot({ path: `${OUT}/02b_diretoria_ceo.png` });
