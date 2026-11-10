@@ -143,6 +143,7 @@ function updateHeader() { $("#pause").checked = !!S.world.agents_paused; $("#pau
 let refreshTimer = null;
 function onEvent(ev) {
   S.ticker.unshift(ev); S.ticker = S.ticker.slice(0, 8);
+  (window.__eventos = window.__eventos || []).push(ev.type); if (window.__eventos.length > 300) window.__eventos.shift();  // tipos recebidos (sem dados) — usado nos testes
   $("#ticker").innerHTML = `<span>Últimos eventos:</span>` + S.ticker.slice(0, 5).map(e =>
     `<span title="ocorrido ${fmtTime(e.occurred_at)} · recebido ${fmtTime(e.received_at)}"><b>${esc(e.type)}</b> ${esc(e.status)} · ${new Date(e.received_at).toLocaleTimeString("pt-BR")}</span>`).join("");
   if (S.w) S.w.pulseFor(ev);

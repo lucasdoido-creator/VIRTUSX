@@ -75,6 +75,7 @@ const diag = await A.page.evaluate(() => { const el = document.querySelector("#p
     lbls: document.querySelectorAll(".lbl").length }; });
 log("painel antes de fechar:", JSON.stringify(diag), "erros até aqui:", JSON.stringify(errors.slice(0, 5)));
 await A.page.click("#closePanel");
+await A.page.evaluate(() => { window.__eventos = []; });  // só conta o que chegar depois da queda
 await A.page.route("**/api/stream**", r => r.abort());
 execSync(process.env.E2E_RESTART || "true", { stdio: "ignore" });
 await A.page.waitForFunction(() => !document.querySelector("#live").classList.contains("live"), null, { timeout: 30000 });
@@ -86,7 +87,8 @@ const d = await (await fetch(BASE + "/api/public/stores/casa-aurora/checkout", {
 log("pedido criado enquanto o painel estava sem conexão:", d.data.order_code);
 await A.page.unroute("**/api/stream**");
 await A.page.waitForSelector("#live.live", { timeout: 30000 });
-await A.page.waitForFunction(() => document.querySelector("#ticker").textContent.includes("estoque.reservado"), null, { timeout: 15000 });
+await A.page.waitForFunction(() => (window.__eventos || []).includes("estoque.reservado"), null, { timeout: 30000 })
+  .catch(async e => { console.log("eventos recebidos:", await A.page.evaluate(() => (window.__eventos || []).slice(-40).join(", "))); throw e; });
 log("reconectado e eventos perdidos recebidos");
 
 // 6. Modo tabelas e visão móvel leve
