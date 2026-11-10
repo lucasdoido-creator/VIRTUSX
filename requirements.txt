@@ -1,6 +1,6 @@
 # Python 3.11+
 starlette>=0.40
-uvicorn>=0.30
+uvicorn>=0.54.0
 httpx>=0.27      # cliente de testes (TestClient) e adaptador de IA
 pytest>=8        # testes
 tzdata>=2024.1   # base oficial de fusos (opcional: sem ela o sistema usa regras embutidas para BR/PT/EUA)
