@@ -16,6 +16,11 @@ const ORDER_STATES = { aguardando_pagamento: "aguardando pagamento", pago: "pago
 
 function toast(msg, err) { const t = document.createElement("div"); t.className = "toast" + (err ? " err" : ""); t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 4200); }
 async function act(fn, okMsg) { try { const r = await fn(); if (okMsg) toast(okMsg); await refresh(); return r; } catch (e) { toast(e.message, true); throw e; } }
+const locBadge = x => { const g = x.geo_source || "";   // precisão real da posição no mapa
+  if (g === "informada manualmente") return badge("coordenadas informadas", "ok");
+  if (g.startsWith("endereço")) return badge("endereço exato", "ok");
+  if (g.startsWith("cidade")) return badge(x.address ? "centro da cidade · buscando endereço" : "centro da cidade (aprox.)", "warn");
+  return badge("aguardando localização", "warn"); };
 const st = l => `<span class="st ${l}"><i></i>${statusText(l)}</span>`;
 const sim = x => x ? `<span class="badge sim">simulado</span>` : "";
 const badge = (t, c = "") => `<span class="badge ${c}">${esc(t)}</span>`;
@@ -417,12 +422,17 @@ const AGENT_RGB_SAFE = s => ({ disponivel: [94, 234, 212], executando: [96, 165,
 
 // ---------- outros painéis
 async function openAgent(id) {
-  const a = (await api("/api/agents")).find(x => x.id === id); const runs = await api(`/api/agents/${id}/runs`); const c = a.config;
+  const [all, runs, aTasks] = await Promise.all([api("/api/agents"), api(`/api/agents/${id}/runs`), can("tasks.read") ? api(`/api/tasks?assignee_id=${id}`).catch(() => []) : []]);
+  const a = all.find(x => x.id === id); const c = a.config;
   openPanel({ title: esc(a.name), sub: `${esc(a.role)} · ${badge(AGENT_LABEL[a.status] || a.status)}`, reload: () => openAgent(id), html: `
     <dl class="kv"><dt>Status</dt><dd>${esc(AGENT_LABEL[a.status] || a.status)} desde ${fmtTime(a.status_since)}</dd>
     <dt>Tarefa atual</dt><dd>${a.current_task ? esc(a.current_task.title) : "—"}</dd><dt>Última atualização confirmada</dt><dd>${fmtTime(a.last_confirmed_at)}</dd>
     <dt>Próxima execução</dt><dd>${fmtTime(a.next_run_at)}</dd><dt>Custo no mês</dt><dd>${fmtMoney(a.month_spend_minor, a.budget_currency)} de ${fmtMoney(a.budget_month_minor, a.budget_currency)} <span class="muted">(rotinas determinísticas não consomem IA)</span></dd></dl>
     ${can("agents.run") && a.enabled ? `<div class="row" style="margin:8px 0"><button class="btn primary small" id="runNow">Executar agora</button></div>` : ""}
+    ${can("tasks.write") && a.enabled ? agentOpForm(a) : ""}
+    <h4>Tarefas deste agente (${aTasks.length})</h4>
+    ${aTasks.length ? aTasks.slice(0, 12).map(t => `<div class="card click" data-task="${t.id}"><b>${esc(t.title)}</b> ${badge(TASK_STATES[t.status] || t.status, t.status === "concluida" ? "ok" : "")}
+      <div class="muted">${esc(t.partner_id ? partnerName(t.partner_id) : "sem cliente")} · prazo ${fmtTime(t.due_at)} · criada ${fmtTime(t.created_at)}</div></div>`).join("") : `<p class="muted">Nenhuma tarefa atribuída.</p>`}
     <details class="card"><summary><b>Definição: ferramentas, dados, limites</b></summary><dl class="kv">
       <dt>Ferramentas</dt><dd>${(c.ferramentas || []).map(esc).join(", ")}</dd><dt>Dados permitidos</dt><dd>${(c.dados_permitidos || []).map(esc).join(", ")}</dd>
       <dt>Dados proibidos</dt><dd>${(c.dados_proibidos || []).map(esc).join(", ")}</dd><dt>Limites</dt><dd>${esc(c.limites)}</dd>
@@ -434,6 +444,50 @@ async function openAgent(id) {
       <details><summary>Ferramentas (${r.tools.length})</summary><ul class="timeline">${r.tools.map(t => `<li><b>${esc(t.tool)}</b> ${t.ok ? "" : badge("falhou", "bad")}<div class="muted">${esc(t.input_summary)} → ${esc(t.output_summary)}</div></li>`).join("")}</ul></details>
       <details><summary>Evidências</summary><pre class="mono" style="white-space:pre-wrap">${esc(JSON.stringify(r.evidence, null, 1))}</pre></details></div>`).join("") || `<p class="muted">Sem execuções.</p>`}` });
   const b = $("#runNow"); if (b) b.onclick = () => act(() => api(`/api/agents/${a.code}/run`, { method: "POST" }), "Execução registrada");
+  $("#pBody").querySelectorAll("[data-task]").forEach(el => el.onclick = () => openTask(el.dataset.task));
+  bindAgentOp(a);
+}
+// ------------------------------------------------------------------ operação manual para um agente
+// Vira uma tarefa atribuída ao agente (auditada, com prazo e cliente); "executar agora" dispara a rotina na hora.
+// O resultado volta como nota na própria tarefa. Agentes nunca recebem permissões novas por causa do texto.
+const AGENT_OPS = {
+  pesquisa: [["Pesquisar mercado", "Ex.: tendências de suporte de TI para clínicas em Campinas"], ["Monitorar concorrentes", "Nomes ou segmento a acompanhar"]],
+  conteudo: [["Escrever texto para cliente", "Ex.: comunicado de manutenção preventiva no sábado"], ["Posts para redes sociais", "Tema e tom"]],
+  analise: [["Analisar conta do cliente", "O que quer entender (atrasos, volume de chamados…)"]],
+  financeiro: [["Projeção do contrato", "Período ou dúvida financeira"]],
+  coordenador: [["Revisar prazos e pendências", "Foco da revisão (cliente, base…)"]],
+  catalogo: [["Revisar catálogo", "Produtos ou ideia a conferir"]],
+  estoque: [["Conferir estoque", "Itens ou armazém"]],
+};
+const whoLabel = a => { const m = /^agent:(.+)$/.exec(a || ""); const ag = m && (S.world.agents || []).find(x => x.id === m[1]);
+  return ag ? "Agente " + ag.name : (a || ""); };
+const partnerName = pid => ((S.world.partners || []).find(p => p.id === pid) || {}).name || pid;
+function agentOpForm(a) {
+  const ops = AGENT_OPS[a.code] || (a.code.startsWith("ceo_") ? [["Ideia ou análise para o CEO", "Descreva"]] : [["Tarefa livre", ""]]);
+  const own = a.code.startsWith("ceo_") ? a.code.slice(4) : null;
+  return `<form class="f card" id="agOp"><h4>Nova operação manual para ${esc(a.name.split(" · ")[0])}</h4>
+    <div class="row"><label>Operação<select name="op">${ops.map(([t], i) => `<option value="${i}">${esc(t)}</option>`).join("")}<option value="livre">Outra (livre)</option></select></label>
+    <label>Cliente<select name="partner_id"><option value="">— nenhum —</option>${(S.world.partners || []).map(p => `<option value="${p.id}" ${p.id === own ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
+    <label>Prazo<input type="datetime-local" name="due"></label><label>Prioridade<select name="priority"><option value="media">média</option><option value="alta">alta</option><option value="baixa">baixa</option><option value="critica">crítica</option></select></label></div>
+    <label>Título<input name="title" required maxlength="160" value="${esc(ops[0][0])}"></label>
+    <label>Instruções<textarea name="description" rows="3" placeholder="${esc(ops[0][1])}"></textarea></label>
+    <label class="row"><input type="checkbox" name="now" checked> executar agora (senão, entra na fila do agente)</label>
+    <button class="btn primary small">Criar operação</button></form>`;
+}
+function bindAgentOp(a) {
+  const f = $("#agOp"); if (!f) return;
+  const ops = AGENT_OPS[a.code] || [];
+  f.op.onchange = () => { const o = ops[+f.op.value]; if (o) { f.title.value = o[0]; f.description.placeholder = o[1]; } else { f.title.value = ""; f.description.placeholder = ""; } };
+  f.onsubmit = async e => { e.preventDefault(); const d = new FormData(f);
+    if (a.code.startsWith("ceo_")) {  // CEO: a operação vira uma ideia do cliente, que ele estuda e divide com a equipe
+      const pid = a.code.slice(4), idea = [d.get("title"), d.get("description")].filter(Boolean).join(". ");
+      await act(() => api(`/api/partners/${pid}/ideas`, { method: "POST", body: { idea } }), "Enviado ao CEO");
+      if (d.get("now")) await act(() => api(`/api/partners/${pid}/ceo/run`, { method: "POST" }), "CEO trabalhando").catch(() => {});
+      return; }
+    const t = await act(() => api("/api/tasks", { method: "POST", body: { title: d.get("title"), description: d.get("description") || null, partner_id: d.get("partner_id") || null,
+      priority: d.get("priority"), due_at: d.get("due") ? new Date(d.get("due")).toISOString() : null, assignee_type: "agente", assignee_id: a.id, kind: "tarefa", source: "manual" } }), "Operação criada");
+    if (d.get("now") && can("agents.run")) await act(() => api(`/api/agents/${a.code}/run`, { method: "POST" }), "Agente executando — o resultado aparece na tarefa").catch(() => {});
+    if (t && t.id) openTask(t.id); };
 }
 async function openOrder(id) {
   const o = await api(`/api/orders/${id}`);
@@ -480,8 +534,8 @@ async function openTask(id) {
       <form class="f card" id="tFile"><label>Anexar documento (PDF, imagem, CSV, TXT, DOCX, XLSX · até 10 MB)<input type="file" name="file" required></label>
       <label class="row"><input type="checkbox" name="ev"> Evidência de conclusão</label><button class="btn small">Enviar anexo</button></form>` : ""}
     <h4>Anexos</h4>${t.attachments.map(a => `<div><a href="/api/attachments/${a.id}">${esc(a.filename)}</a> ${a.is_evidence ? badge("evidência", "ok") : ""} <span class="muted mono">sha256 ${a.sha256.slice(0, 12)}… · ${esc(a.uploaded_by)}</span></div>`).join("") || `<p class="muted">Nenhum.</p>`}
-    <h4>Comentários</h4>${t.comments.map(c => `<div class="card"><div class="muted">${esc(c.author)} · ${fmtTime(c.created_at)}</div><div style="white-space:pre-wrap">${esc(c.body)}</div></div>`).join("") || `<p class="muted">Nenhum.</p>`}
-    <h4>Histórico</h4><ul class="timeline">${t.history.map(h => `<li>${esc(h.field)}: ${esc(h.old ?? "")} → ${esc(h.new ?? "")}<div class="muted">${esc(h.actor)} · ${fmtTime(h.at)}</div></li>`).join("")}</ul>` });
+    <h4>Comentários</h4>${t.comments.map(c => `<div class="card"><div class="muted">${esc(whoLabel(c.author))} · ${fmtTime(c.created_at)}</div><div style="white-space:pre-wrap">${esc(c.body)}</div></div>`).join("") || `<p class="muted">Nenhum.</p>`}
+    <h4>Histórico</h4><ul class="timeline">${t.history.map(h => `<li>${esc(h.field)}: ${esc(h.old ?? "")} → ${esc(h.new ?? "")}<div class="muted">${esc(whoLabel(h.actor))} · ${fmtTime(h.at)}</div></li>`).join("")}</ul>` });
   $("#pBody").querySelectorAll("[data-ck]").forEach(x => x.onchange = () =>
     api(`/api/tasks/${id}/checklist`, { method: "POST", body: { index: +x.dataset.ck, done: x.checked } }).then(() => openTask(id)).catch(er => { toast(er.message, true); openTask(id); }));
   const f = $("#tEdit"); if (f) f.onsubmit = e => { e.preventDefault(); const d = new FormData(f); const body = { status: d.get("status") };
@@ -629,9 +683,16 @@ async function renderCadastros(body, fresh) {
   body.innerHTML = `
   ${pend.length ? `<div class="card"><h4>Freelancers aguardando sua autorização (${pend.length})</h4>${pend.map(u => `<div class="row">${esc(u.name)} · ${esc(u.email)} · base ${esc(u.base_name || "—")}
     ${w ? `<button class="btn small primary" data-auth="${u.id}">Autorizar</button>` : ""}</div>`).join("")}</div>` : ""}
+  <div class="card"><h4>Sede · administração central</h4>
+    <p class="muted">Posição atual no mapa: ${d.sede.padrao ? badge("padrão — informe a sua sede", "warn") : `${esc(d.sede.city || "")} ${locBadge(d.sede)}`}</p>
+    ${w ? `<form class="f" data-form="sede"><div class="row"><label>Nome<input name="name" value="${esc(d.sede.name || "Administração central")}"></label>
+      <label>Cidade<input name="city" required value="${esc(d.sede.city || "")}"></label><label>UF<input name="state" maxlength="2" size="3" value="${esc(d.sede.state || "SP")}"></label>
+      <label>Endereço (rua e número)<input name="address" value="${esc(d.sede.address || "")}"></label>
+      <label>Coordenadas (opcional)<input name="coords" placeholder="-22.37, -46.94" value="${d.sede.geo_source === "informada manualmente" ? `${d.sede.lat}, ${d.sede.lng}` : ""}"></label>
+      <button class="btn primary small">Salvar sede</button></div></form>` : ""}</div>
   <div class="card"><h4>Bases / filiais (${d.bases.length})</h4>
     <table class="t"><thead><tr><th>Nome</th><th>Cidade</th><th>Localização</th><th>Situação</th><th></th></tr></thead><tbody>${d.bases.map(b => `<tr><td>${esc(b.name)}</td><td>${esc(b.city)}/${esc(b.state || "")}</td>
-      <td>${b.location_status === "confirmada" ? badge("confirmada", "ok") : badge("não confirmada", "warn")}</td><td>${b.active ? "ativa" : badge("inativa", "warn")}</td>
+      <td>${locBadge(b)}</td><td>${b.active ? "ativa" : badge("inativa", "warn")}</td>
       <td>${w ? `<button class="btn small" data-edit="base" data-id="${b.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
     ${w ? `<form class="f" data-form="base"><input type="hidden" name="id"><div class="row"><label>Nome<input name="name" required></label><label>Cidade<input name="city" required></label>
       <label>UF<input name="state" maxlength="2" value="SP" size="3"></label><label>Endereço<input name="address"></label>
@@ -648,7 +709,7 @@ async function renderCadastros(body, fresh) {
       <label>Observações<textarea name="notes" rows="2"></textarea></label><button class="btn primary small">Salvar cliente</button></form>` : ""}</div>
   <div class="card"><h4>Unidades dos clientes (${d.units.length})</h4>
     <table class="t"><thead><tr><th>Cliente</th><th>Unidade</th><th>Cidade</th><th>Atendida por</th><th>Localização</th><th></th></tr></thead><tbody>${d.units.map(u => `<tr><td>${esc(u.partner_name)}</td><td>${esc(u.name)}${u.active ? "" : " " + badge("inativa", "warn")}</td>
-      <td>${esc(u.city || "")}/${esc(u.state || "")}</td><td>${esc(u.base_name || "—")}</td><td>${u.location_status === "confirmada" ? badge("confirmada", "ok") : badge("não confirmada", "warn")}</td>
+      <td>${esc(u.city || "")}/${esc(u.state || "")}</td><td>${esc(u.base_name || "—")}</td><td>${locBadge(u)}</td>
       <td>${w ? `<button class="btn small" data-edit="unit" data-id="${u.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
     ${w && d.clients.length ? `<form class="f" data-form="unit"><input type="hidden" name="id"><div class="row"><label>Cliente<select name="client_id">${opt(d.clients, null, c => c.name)}</select></label>
       <label>Nome da unidade<input name="name" required></label><label>Cidade<input name="city" required></label><label>UF<input name="state" maxlength="2" value="SP" size="3"></label>
@@ -671,7 +732,7 @@ async function renderCadastros(body, fresh) {
       <label>Base (p/ técnico)<select name="base_id"><option value="">—</option>${opt(d.bases, null, b => b.name)}</select></label>
       <label>Senha (mín. 10; em edição, só se for trocar)<input name="password" type="password" minlength="10" autocomplete="new-password"></label>
       <label class="row"><input type="checkbox" name="active" checked> ativo/autorizado</label><button class="btn primary small">Salvar acesso</button></div></form>` : ""}</div>`;
-  const ROUTE = { base: "bases", client: "clientes", unit: "unidades", user: "usuarios" };
+  const ROUTE = { base: "bases", client: "clientes", unit: "unidades", user: "usuarios", sede: "sede" };
   const ctf = body.querySelector("form[data-form=contact]"); if (ctf) { ctf.removeAttribute("data-form"); ctf.onsubmit = async e => { e.preventDefault(); const f = new FormData(ctf);
     await act(() => api("/api/contacts", { method: "POST", body: { partner_id: f.get("partner_id"), name: f.get("name"), phone: f.get("phone"), role: f.get("role") } }), "Contato salvo"); renderTables(); }; }
   const SRC = { base: d.bases, client: d.clients, unit: d.units, user: d.users };
@@ -687,7 +748,8 @@ async function renderCadastros(body, fresh) {
   body.querySelectorAll("[data-edit]").forEach(bt => bt.onclick = () => {
     const k = bt.dataset.edit, x = SRC[k].find(r => r.id === bt.dataset.id), f = body.querySelector(`form[data-form=${k}]`); if (!x || !f) return;
     const val = { ...x, contract: x.contract_minor != null ? (x.contract_minor / 100).toFixed(2).replace(".", ",") : "", client_id: x.partner_id,
-      location_confirmed: x.location_status === "confirmada", active: k === "client" ? x.status === "ativo" : !!x.active };
+      location_confirmed: x.location_status === "confirmada", active: k === "client" ? x.status === "ativo" : !!x.active,
+      coords: x.geo_source === "informada manualmente" && x.lat != null ? `${x.lat}, ${x.lng}` : "" };  // editar não apaga coordenadas informadas
     for (const el of f.elements) { if (!el.name || !(el.name in val) && el.name !== "id") continue;
       if (el.type === "checkbox") el.checked = !!val[el.name]; else if (el.name !== "password") el.value = val[el.name] ?? ""; }
     f.querySelector("[name=id]").value = x.id; f.scrollIntoView({ behavior: motion.reduced ? "auto" : "smooth", block: "center" }); f.querySelector("button").textContent = "Salvar alterações";

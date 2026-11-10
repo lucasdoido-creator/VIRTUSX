@@ -39,9 +39,9 @@ def _coords(data, city, state, country="BR"):
             return lat, lng, "informada manualmente"
         except Exception:
             raise AppError("Coordenadas inválidas: use o formato -23.55, -46.63", "coordenadas_invalidas")
-    from .geo import _gaz
-    hit = _gaz(city, state)
-    return (*hit, "cidade (tabela embutida)") if hit else (None, None, None)
+    from .geo import geocode
+    hit = geocode(city, state, country, offline=True)   # tabela embutida ou cache: instantâneo; o resto o agendador busca
+    return hit if hit else (None, None, None)
 
 
 def _money(v):
@@ -64,7 +64,48 @@ def overview(actor: Principal):
                      "LEFT JOIN service_bases b ON b.id=u.base_id WHERE p.commercial_model='cliente_servico' ORDER BY p.name, u.name")
     users = R.db.all("SELECT u.id, u.name, u.email, u.role, u.partner_id, u.base_id, u.active, p.name partner_name, b.name base_name FROM users u "
                      "LEFT JOIN partners p ON p.id=u.partner_id LEFT JOIN service_bases b ON b.id=u.base_id ORDER BY u.active DESC, u.name")
-    return {"bases": bases, "clients": clients, "units": units, "users": users, "roles": sorted(ROLES_ALLOWED)}
+    return {"bases": bases, "clients": clients, "units": units, "users": users, "roles": sorted(ROLES_ALLOWED), "sede": get_hq()}
+
+
+# ------------------------------------------------------------------ sede (administração central)
+def get_hq(raw=False):
+    """Local da sede no mapa. Sem cadastro: posição da configuração (HQ_LAT/HQ_LNG), marcada como padrão."""
+    import json
+    row = R.db.one("SELECT value FROM app_settings WHERE key='sede'")
+    v = json.loads(row["value"]) if row else None
+    if raw:
+        return v
+    if v and v.get("lat") is not None:
+        return v
+    return {**(v or {}), "lat": R.settings.hq_lat, "lng": R.settings.hq_lng,
+            "geo_source": (v or {}).get("geo_source") or "padrão (configure em Cadastros → Sede)", "padrao": True}
+
+
+def _put_hq(c, v):
+    import json
+    c.execute("INSERT OR REPLACE INTO app_settings(key,value,updated_at) VALUES ('sede',?,?)", (json.dumps(v, ensure_ascii=False), iso()))
+
+
+def save_hq(actor: Principal, data):
+    actor.require("cadastros.write")
+    v = {"name": _txt(data.get("name"), 120) or "Administração central", "city": _txt(data.get("city"), 80, True, "a cidade da sede"),
+         "state": _uf(data.get("state")) or "SP", "address": _txt(data.get("address"), 240)}
+    lat, lng, src = _coords(data, v["city"], v["state"])
+    v.update(lat=lat, lng=lng, geo_source=src)
+    with R.db.tx() as c:
+        before = get_hq(raw=True)
+        _put_hq(c, v)
+        audit(c, actor, "sede.atualizada", "settings", "sede", before, v)
+        emit(c, "cadastro.sede", "cadastros", "settings", "sede")
+    return get_hq()
+
+
+def set_hq_coords(lat, lng, src):
+    v = get_hq(raw=True) or {}
+    v.update(lat=lat, lng=lng, geo_source=src)
+    with R.db.tx() as c:
+        _put_hq(c, v)
+        emit(c, "cadastro.sede", "cadastros", "settings", "sede")
 
 
 # ------------------------------------------------------------------ bases de serviço (suas unidades)

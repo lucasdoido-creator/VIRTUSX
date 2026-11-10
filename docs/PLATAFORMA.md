@@ -206,6 +206,21 @@ Regras da Meta respeitadas: respostas livres só até **24 h** após a última m
 
 **Mapa realista**: imagem de satélite NASA Blue Marble (domínio público, via NASA GIBS) no mundo inteiro; ao aproximar, imagem mais nítida só da área vista; opção **Ruas** (OpenStreetMap, com cache em disco e sem download em massa) e **Escuro** (vetorial). Unidades mostram colunas de operações: verde = feitas em 30 dias, âmbar/vermelho = abertas/atrasadas; tarefas criadas/concluídas geram pulso da base até a unidade.
 
+## 7.5 Posições exatas e operações manuais para agentes
+
+**Posição de cada empresa** (coluna *Localização* em Cadastros mostra a precisão real):
+- **coordenadas informadas** — você digitou (prioridade máxima; o sistema nunca sobrescreve; editar o cadastro mantém);
+- **endereço exato** — rua e número localizados no OpenStreetMap; só é aceito se cair a até 40 km do centro da cidade (evita "Rua X" de outra cidade);
+- **centro da cidade** — enquanto o endereço não é localizado (ou se não houver endereço);
+- **aguardando localização** — o agendador busca sozinho (até 3 endereços por volta, 1 consulta/s, cada endereço consultado uma única vez — inclusive quando não acha).
+Dica: para precisão total, copie as coordenadas do Google Maps (clique direito no local → copiar "-22.37, -46.94") e cole no campo *Coordenadas*.
+
+**Sede**: *Cadastros → Sede · administração central* (cidade, endereço ou coordenadas). Sem cadastro, o mapa usa a posição padrão e avisa no rótulo. Parceiros não veem o endereço da sede.
+
+**Escala do mapa**: 1 unidade ≈ 0,55 km — prédios não cobrem cidades vizinhas; rótulos que se sobrepõem são escondidos por prioridade (país › sede › cliente › base › unidade › CEO › agentes) e aparecem ao aproximar.
+
+**Operação manual para um agente**: abra o agente (mapa ou *Tabelas → Agentes*) → *Nova operação manual*: tipo (ex.: pesquisar mercado, escrever texto, analisar conta, revisar prazos), cliente, prazo, prioridade e instruções; "executar agora" dispara a rotina na hora. Vira uma tarefa atribuída ao agente (auditada); o resultado volta como comentário na tarefa. No CEO de um cliente, a operação entra como ideia para ele estudar e dividir com a equipe. As instruções não dão ao agente nenhuma permissão nova.
+
 ## 8. Como executar e acessar
 
 **Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
@@ -225,7 +240,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **87 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **92 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

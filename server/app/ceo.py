@@ -340,7 +340,7 @@ def r_pesquisa(run):
             run._set_agent("executando", t["id"], t["partner_id"])
         v = _venture_of(t)
         reg = _region(t["partner_id"]) if t["partner_id"] else {"code": "BR"}
-        q = (v["keywords"] if v and v["keywords"] else (v["idea"][:80] if v else t["title"]))
+        q = (v["keywords"] if v and v["keywords"] else (v["idea"][:80] if v else (t.get("description") or t["title"])[:100]))
         found = research.news(q, reg["code"], limit=8)
         lines = [f"• {i['title']} ({i['source']}) {i['link']}" for i in found["items"]]
         summary = ""
@@ -381,7 +381,7 @@ def r_conteudo(run):
         try:
             out = brain.think("Você redige textos de varejo em português. Responda JSON {\"titulo\":...,\"chamada\":...,"
                               "\"descricao\":...,\"posts\":[até 3 textos curtos]}. Não prometa preços, prazos ou descontos.",
-                              f"Tarefa: {t['title']}\nIdeia: {v['idea'] if v else ''}\n<dados>{json.dumps({'produtos': snap.get('produtos_autorizados', [])[:8]}, ensure_ascii=False)}</dados>",
+                              f"Tarefa: {t['title']}\nInstruções de quem pediu: {(t.get('description') or '')[:600]}\nIdeia: {v['idea'] if v else ''}\n<dados>{json.dumps({'produtos': snap.get('produtos_autorizados', [])[:8]}, ensure_ascii=False)}</dados>",
                               tier="rotina", purpose="conteudo.rascunho", partner_id=t["partner_id"], max_tokens=700)
             d = out["data"] or {}
             draft = (f"RASCUNHO para revisão humana (IA {out['model']}), não publicado automaticamente:\n"

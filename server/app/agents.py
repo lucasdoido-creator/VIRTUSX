@@ -176,6 +176,9 @@ def _start_task(run, t):
 # ------------------------------------------------------------------ rotinas
 def r_coordenador(run):
     c = run.c
+    mine = _pick_assigned_tasks(run)   # operações manuais pedidas ao coordenador: o relatório desta volta vira a entrega
+    for t in mine:
+        _start_task(run, t)
     open_tasks = [dict(r) for r in c.execute("SELECT * FROM tasks WHERE status IN ('a_fazer','em_andamento','aguardando_terceiro',"
                                              "'aguardando_aprovacao') AND (recurrence_rule IS NULL OR recurrence_parent_id IS NOT NULL)").fetchall()]
     overdue = [t for t in open_tasks if tasks.is_overdue(t)]
@@ -192,8 +195,13 @@ def r_coordenador(run):
     failed = c.execute("SELECT code FROM agents WHERE status='falhou'").fetchall()
     unassigned = [t for t in open_tasks if not t["assignee_id"] and t["kind"] == "pendencia"]
     run.tool("pendencias.criar", f"{len(escalated)} encaminhamentos", ",".join(escalated) or "-")
-    run.finish("concluido", f"{len(open_tasks)} tarefas abertas; {len(overdue)} vencidas; {len(escalated)} encaminhadas; "
-                            f"{len(unassigned)} pendências sem responsável; agentes com falha: {', '.join(f[0] for f in failed) or 'nenhum'}.",
+    report = (f"{len(open_tasks)} tarefas abertas; {len(overdue)} vencidas; {len(escalated)} encaminhadas; "
+              f"{len(unassigned)} pendências sem responsável; agentes com falha: {', '.join(f[0] for f in failed) or 'nenhum'}.")
+    for t in mine:
+        lines = [f"• {x['title']} (prazo {x['due_at'][:16].replace('T', ' ') if x['due_at'] else '—'})" for x in overdue[:15]]
+        tasks.update_task(c, run.actor, t["id"], {"status": "concluida"},
+                          note="Revisão de prazos e pendências (cálculo determinístico):\n" + report + ("\nVencidas:\n" + "\n".join(lines) if lines else ""))
+    run.finish("concluido", report,
                {"vencidas": [t["id"] for t in overdue], "encaminhadas": escalated, "sem_responsavel": [t["id"] for t in unassigned]})
 
 

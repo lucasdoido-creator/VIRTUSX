@@ -61,6 +61,13 @@ def building_status(partner_id):
             "last_data_at": last_ev["received_at"] if last_ev else None}
 
 
+def _hq(actor):
+    from . import registry
+    h = registry.get_hq()
+    return {"lat": h["lat"], "lng": h["lng"], "padrao": bool(h.get("padrao")), "geo_source": h.get("geo_source"),
+            **({"name": h.get("name"), "city": h.get("city")} if actor.is_central else {})}   # endereço da sede não vai para parceiros
+
+
 def world(actor: Principal):
     actor.require("world.read")
     scope = actor.partner_scope()
@@ -101,7 +108,7 @@ def world(actor: Principal):
         b["pendentes"] = R.db.val("SELECT COUNT(*) FROM users WHERE base_id=? AND role='tecnico' AND active=0", b["id"])
     from . import geo
     return {
-        "hq": {"lat": R.settings.hq_lat, "lng": R.settings.hq_lng},
+        "hq": _hq(actor),
         "region_country": geo.REGION_COUNTRY, "country_center": geo.COUNTRY_CENTER, "geo": geo.status(),
         "service_bases": bases,
         "environment": R.settings.env, "generated_at": iso(), "view": "central" if actor.is_central else "parceiro",

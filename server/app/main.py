@@ -347,6 +347,7 @@ def _demo_replay(req, p, b):
 
 
 def _reg(req, p, b): return registry.overview(p)
+def _reg_hq(req, p, b): return registry.save_hq(p, b)
 def _reg_base(req, p, b): return {"id": registry.save_base(p, b, req.path_params.get("id"))}
 def _reg_client(req, p, b): return {"id": registry.save_client(p, b, req.path_params.get("id"))}
 def _reg_unit(req, p, b): return {"id": registry.save_unit(p, b, req.path_params.get("id"))}
@@ -613,7 +614,7 @@ def create_app(**overrides):
         Route("/api/saude/erro-tela", client_error, methods=["POST"]),
         Route("/api/geo/imagem/mundo", P(_geo_img_world)), Route("/api/geo/imagem/regiao", P(_geo_img_box)),
         Route("/api/geo/tile/{z:int}/{x:int}/{y:int}", P(_geo_tile)),
-        Route("/api/cadastros", P(_reg)),
+        Route("/api/cadastros", P(_reg)), Route("/api/cadastros/sede", P(_reg_hq), methods=["POST"]),
         Route("/api/cadastros/bases", P(_reg_base), methods=["POST"]), Route("/api/cadastros/bases/{id}", P(_reg_base), methods=["PUT"]),
         Route("/api/cadastros/clientes", P(_reg_client), methods=["POST"]), Route("/api/cadastros/clientes/{id}", P(_reg_client), methods=["PUT"]),
         Route("/api/cadastros/unidades", P(_reg_unit), methods=["POST"]), Route("/api/cadastros/unidades/{id}", P(_reg_unit), methods=["PUT"]),

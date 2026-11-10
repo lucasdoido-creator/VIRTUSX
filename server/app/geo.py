@@ -247,8 +247,8 @@ def _gaz(city, state):
     return GAZETTEER.get(f"{c}|{s}") or GAZETTEER.get(f"{c}|")
 
 
-def geocode(city, state=None, country="BR"):
-    """(lat, lng, fonte) ou None. Ordem: tabela embutida → cache → Nominatim (online)."""
+def geocode(city, state=None, country="BR", offline=False):
+    """(lat, lng, fonte) ou None. Ordem: tabela embutida → cache → Nominatim (online; nunca com offline=True)."""
     if not city:
         return None
     hit = _gaz(city, state)
@@ -259,6 +259,8 @@ def geocode(city, state=None, country="BR"):
     if row:
         v = json.loads(row["payload"])
         return (v[0], v[1], v[2]) if v else None
+    if offline:
+        return None
     try:
         if TRANSPORT["geocode"]:
             res = TRANSPORT["geocode"](city, state, country)
@@ -281,9 +283,86 @@ def geocode(city, state=None, country="BR"):
     return tuple(val) if val else None
 
 
+ADDR_SRC = "endereço (OpenStreetMap)"
+PRECISE = ("informada manualmente", ADDR_SRC)
+
+
+def _km(a, b):
+    import math
+    dlat, dlng = math.radians(b[0] - a[0]), math.radians(b[1] - a[1])
+    h = math.sin(dlat / 2) ** 2 + math.cos(math.radians(a[0])) * math.cos(math.radians(b[0])) * math.sin(dlng / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+
+def geocode_address(address, city, state=None, country="BR"):
+    """Posição exata pelo endereço (rua e número). Só aceita resultado a até 40 km do centro da cidade
+    (evita "Rua X" de outra cidade). Cache inclusive negativo: o mesmo endereço nunca é consultado duas vezes.
+    Retorna (lat, lng, fonte), None (não encontrado) ou "depois" (sem rede agora)."""
+    if not address or not city:
+        return None
+    key = "geoaddr:" + "|".join(norm(x) for x in (address, city, state or "", country))
+    row = R.db.one("SELECT payload FROM research_cache WHERE key=?", key)
+    if row:
+        v = json.loads(row["payload"])
+        return tuple(v) if v else None
+    center = geocode(city, state, country)        # precisa do centro da cidade para validar o resultado
+    if not center:
+        return "depois"
+    try:
+        if TRANSPORT["geocode"]:
+            res = TRANSPORT["geocode"](f"{address}, {city}", state, country)
+        else:
+            if not R.settings.research_enabled:
+                return "depois"
+            import httpx
+            time.sleep(1.1)  # Nominatim: no máximo 1 requisição por segundo
+            r = httpx.get("https://nominatim.openstreetmap.org/search", timeout=20,
+                          params={"q": f"{address}, {city}, {state or ''}, {country}", "countrycodes": country.lower(), "format": "json", "limit": 1},
+                          headers={"User-Agent": "VIRTUSX/1.0 (operacao interna)"})
+            r.raise_for_status()
+            j = r.json()
+            res = (float(j[0]["lat"]), float(j[0]["lon"])) if j else None
+    except Exception:
+        return "depois"
+    val = None
+    if res and _km(center, res) <= 40:
+        val = [round(res[0], 6), round(res[1], 6), ADDR_SRC]
+    with R.db.tx() as c:
+        c.execute("INSERT OR REPLACE INTO research_cache(key,fetched_at,payload) VALUES (?,?,?)", (key, iso(), json.dumps(val)))
+    return tuple(val) if val else None
+
+
 def geocode_missing(limit=5):
-    """Agendador: preenche coordenadas que faltam (unidades, bases, armazéns)."""
+    """Agendador: preenche coordenadas que faltam (unidades, bases, armazéns, sede) e refina pelo endereço."""
     done = 0
+    from . import registry
+    # sede (administração central)
+    hq = registry.get_hq(raw=True)
+    if hq and hq.get("city") and hq.get("geo_source") not in PRECISE:
+        g = geocode_address(hq.get("address"), hq["city"], hq.get("state")) if hq.get("address") else None
+        if g == "depois":
+            g = None
+        g = g or (geocode(hq["city"], hq.get("state")) if hq.get("lat") is None else None)
+        if g:
+            registry.set_hq_coords(*g)
+            done += 1
+    # endereço exato (rua e número) — até 3 por volta, respeitando o limite do Nominatim
+    budget = 3
+    for table in ("partner_units", "service_bases"):
+        rows = R.db.all(f"SELECT * FROM {table} WHERE address IS NOT NULL AND address<>'' AND city IS NOT NULL"
+                        f" AND (geo_source IS NULL OR geo_source NOT IN (?,?))", *PRECISE)
+        for r in rows:
+            if budget <= 0:
+                break
+            country = r.get("country") or "BR"
+            cached = R.db.one("SELECT 1 FROM research_cache WHERE key=?", "geoaddr:" + "|".join(norm(x) for x in (r["address"], r["city"], r.get("state") or "", country)))
+            g = geocode_address(r["address"], r["city"], r.get("state"), country)
+            if not cached:
+                budget -= 1
+            if g and g != "depois":
+                with R.db.tx() as c:
+                    c.execute(f"UPDATE {table} SET lat=?, lng=?, geo_source=? WHERE id=?", (g[0], g[1], g[2], r["id"]))
+                done += 1
     for table, ccol in (("partner_units", "country"), ("service_bases", None), ("warehouses", None)):
         rows = R.db.all(f"SELECT * FROM {table} WHERE lat IS NULL AND city IS NOT NULL LIMIT ?", limit)
         for r in rows:

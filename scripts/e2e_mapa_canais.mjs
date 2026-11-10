@@ -54,6 +54,21 @@ await A.click("#tk"); await A.waitForSelector("#pTitle:has-text('Atendimento de 
 log("conversa vinculada, resposta enviada (simulada) e chamado aberto a partir do WhatsApp");
 await A.click("#closePanel"); await A.screenshot({ path: `${OUT}/m5_atendimento.png` });
 
+// Sede no lugar certo + operação manual para um agente
+await A.click("[data-view='tabelas']"); await A.click("#tTabs button:has-text('Cadastros')");
+await A.waitForSelector("form[data-form=sede]");
+await A.fill("form[data-form=sede] [name=city]", "Campinas"); await A.fill("form[data-form=sede] [name=coords]", "-22.9056, -47.0608");
+await A.click("form[data-form=sede] button"); await A.waitForSelector("#tBody .card:has-text('Sede') .badge:has-text('coordenadas informadas')", { timeout: 10000 });
+log("sede cadastrada com posição exata");
+await A.click("#tTabs button:has-text('Agentes')"); await A.click("#tBody tr:has-text('Coordenação')");
+await A.waitForSelector("#agOp", { timeout: 10000 });
+await A.fill("#agOp [name=description]", "Foco nos chamados atrasados da Casa Aurora");
+await A.click("#agOp button.primary");
+await A.waitForFunction(() => (document.querySelector("#pBody")?.textContent || "").includes("Revisão de prazos e pendências (cálculo determinístico)"), null, { timeout: 20000 });
+log("operação manual: coordenador executou e entregou o relatório na tarefa");
+await A.screenshot({ path: `${OUT}/m7_operacao_agente.png` });
+await A.click("#closePanel");
+
 // Tipo de mapa e saúde do sistema
 await A.click("[data-view='3d']"); await A.click("#basemapSeg [data-bm='ruas']");
 if ((await A.getAttribute("#basemapSeg [data-bm='ruas']", "aria-pressed")) !== "true") throw new Error("seletor de mapa não marcou Ruas");

@@ -3,7 +3,8 @@
 import { to, motion } from "./anim.js";
 import { esc } from "./api.js";
 
-export const K = 40;  // unidades do mundo por grau
+export const K = 200;  // unidades do mundo por grau (1 unidade ≈ 0,55 km: prédios não cobrem cidades vizinhas)
+const F = K / 40;     // distâncias de câmera/rótulos em escala de mapa acompanham K
 const ll = (lat, lng) => [lng * K, 0, -lat * K];
 const SECTOR_OFF = { catalogo: [-20, 0, -20], logistica: [20, 0, -20], atendimento: [-20, 0, 20], financeiro: [20, 0, 20] };
 const SECTOR_COLOR = { catalogo: [0.35, 0.30, 0.75], logistica: [0.10, 0.50, 0.55], atendimento: [0.55, 0.35, 0.20], financeiro: [0.20, 0.50, 0.30] };
@@ -21,6 +22,8 @@ export const FLOORS = [["recepcao", "Recepção"], ["comercial", "Comercial"], [
 const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const COUNTRY_PT = { Brazil: "Brasil", Portugal: "Portugal", "United States of America": "Estados Unidos" };
 
+const LABEL_PRIO = { floor: 11, region: 10, hq: 9, partner: 8, base: 7, unit: 6, warehouse: 5, sector: 4, estado: 3, agent: 2 };
+const labelPrio = L => L.prio ?? (L.prio = (L.cls || "").includes("ceo") ? 4.5 : (LABEL_PRIO[L.key.split(":")[0]] ?? 1));
 const loadImg = src => new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = src; });
 function pip(lon, lat, ring) {  // ponto no polígono (anel achatado [lon,lat,...])
   let inside = false;
@@ -46,7 +49,7 @@ function segments(list, y) {
 
 export class World {
   constructor(renderer, labelsEl, handlers) {
-    this.r = renderer; this.labelsEl = labelsEl; this.h = handlers; this.r.reduced = motion.reduced; this.r.K = K; this.r.maxDist = 14000;
+    this.r = renderer; this.labelsEl = labelsEl; this.h = handlers; this.r.reduced = motion.reduced; this.r.K = K; this.r.maxDist = 14000 * F;
     this.objs = new Map(); this.labels = []; this.agentPos = new Map(); this.filters = { levels: new Set(Object.keys(LEVEL_RGB)), region: null };
     this.countries = []; this.states = null; this.tip = document.getElementById("hoverTip");
     this.r.onClick = (m, g) => {
@@ -110,11 +113,11 @@ export class World {
     this.r.addLineSet("estados", segments(this.states.states, 0.3), [0.75, 0.55, 1.0, 0.45]);
     for (const s of this.states.states) {
       const b = s.bbox; this._label("estado:" + s.name, esc(s.code || s.name), ll((b[1] + b[3]) / 2, (b[0] + b[2]) / 2), { kind: "state", id: s.name, data: s, country: st.country },
-        false, null, "estado", [0, 2600]);
+        false, null, "estado", [0, 2600 * F]);
     }
   }
   _place(p) {  // evita sobreposição de prédios na mesma cidade (espiral determinística)
-    const cell = 18; for (let i = 0; i < 60; i++) {
+    const cell = 12; for (let i = 0; i < 60; i++) {
       const a = i * 2.4, rr = i ? cell * (0.8 + i * 0.18) : 0, q = [p[0] + Math.cos(a) * rr, 0, p[2] + Math.sin(a) * rr];
       const key = `${Math.round(q[0] / cell)},${Math.round(q[2] / cell)}`; if (!this.occ.has(key)) { this.occ.add(key); return q; }
     }
@@ -142,8 +145,8 @@ export class World {
     r.add({ pos: add3(HQ, [0, 52, 0]), scale: [10, 4, 10], color: [0.37, 0.92, 0.83], emissive: 0.6 });
     r.add({ pos: add3(HQ, [0, 56, 0]), scale: [1.2, 22, 1.2], color: [0.65, 0.55, 1.0], emissive: 0.9 });
     for (const [y, s] of [[18, 26], [32, 23], [46, 20]]) r.add({ pos: add3(HQ, [0, y, 0]), scale: [s, 0.35, s], color: [0.37, 0.92, 0.83], emissive: 0.8, alpha: 0.28 });
-    r.add({ pos: add3(HQ, [0, 0, 0]), scale: [90, 0.3, 90], color: [0.37, 0.92, 0.83], emissive: 0.4, alpha: 0.18 });  // sinal visível de longe
-    this.objs.set("hq", hq); this._label("hq", "Administração central", add3(HQ, [0, 60, 0]), { kind: "hq", id: "hq" }, false, null, null, [0, 14000]);
+    r.add({ pos: add3(HQ, [0, 0, 0]), scale: [36, 0.3, 36], color: [0.37, 0.92, 0.83], emissive: 0.4, alpha: 0.18 });  // sinal visível de longe
+    this.objs.set("hq", hq); this._label("hq", `${esc(data.hq.name || "Administração central")}${data.hq.padrao ? " <small>· local padrão: informe em Cadastros → Sede</small>" : ""}`, add3(HQ, [0, 60, 0]), { kind: "hq", id: "hq" }, false, null, null, [0, 14000 * F]);
     for (const k of Object.keys(SECTOR_OFF)) this.occ.add(`${Math.round((HQ[0] + SECTOR_OFF[k][0]) / 18)},${Math.round((HQ[2] + SECTOR_OFF[k][2]) / 18)}`);
     if (central) for (const s of data.sectors) this._safe("setor", () => {
       const pos = add3(HQ, SECTOR_OFF[s.code]);
@@ -155,7 +158,7 @@ export class World {
       const n = (data.partners.filter(p => p.region_code === reg.code)).length; if (!n && !central) continue;
       const c = (data.country_center || {})[reg.code]; if (!c) continue;
       this._label("region:" + reg.code, `${esc(reg.name)} <small>${n} cliente(s)/parceiro(s) · ${reg.sales_enabled ? "vendas liberadas" : "vendas bloqueadas"}</small>`,
-        ll(c[0], c[1]), { kind: "region", id: reg.code, data: reg }, false, null, "pais", [1800, 14000]);
+        ll(c[0], c[1]), { kind: "region", id: reg.code, data: reg }, false, null, "pais", [1800 * F, 14000 * F]);
     }
     for (const w of data.warehouses) this._safe("armazem", () => {
       const { pos: p0 } = this._coordOf(w.lat, w.lng, w.region_code), pos = this._place(p0);
@@ -169,10 +172,10 @@ export class World {
       const { pos: p0 } = this._coordOf(sb.lat, sb.lng, "BR"), pos = this._place(p0); sb._pos = pos;
       r.add({ pos, scale: [9, 12, 7], color: [0.10, 0.22, 0.30], win: 1, edge: 1, winColor: [0.35, 1.0, 0.75], pick: { kind: "base", id: sb.id, data: sb } });
       r.add({ pos: add3(pos, [0, 12, 0]), scale: [0.6, 7, 0.6], color: [0.35, 1.0, 0.75], emissive: 1.0 });
-      r.add({ pos, scale: [30, 0.3, 30], color: [0.35, 1.0, 0.75], emissive: 0.5, alpha: 0.2 });
+      r.add({ pos, scale: [16, 0.3, 16], color: [0.35, 1.0, 0.75], emissive: 0.5, alpha: 0.2 });
       this.objs.set("base:" + sb.id, { pos, home: pos });
       this._label("base:" + sb.id, `<span class="sw" style="background:#5ff5c0"></span>Base · ${esc(sb.name)} <small>${esc(sb.city || "")} · ${sb.tecnicos} técnico(s)${sb.pendentes ? ` · ${sb.pendentes} aguardando` : ""}</small>`,
-        add3(pos, [0, 21, 0]), { kind: "base", id: sb.id, data: sb }, false, null, null, [0, 5000]);
+        add3(pos, [0, 21, 0]), { kind: "base", id: sb.id, data: sb }, false, null, null, [0, 5000 * F]);
     }));
     for (const p of data.partners) this._safe("cliente", () => {
       p.units = p.units || []; p.status = p.status || { level: "cinza" };
@@ -180,7 +183,7 @@ export class World {
       const { pos: p0, approx } = this._coordOf(u0.lat, u0.lng, p.region_code), pos = this._place(p0);
       const lvl = p.status.level, h = 20 + Math.min(p.units.length, 4) * 5, visible = this._passes(p);
       const base = r.add({ pos, scale: [13, 0.5, 13], color: LEVEL_RGB[lvl], emissive: 0.35, alpha: 0.55, visible });
-      const ring = r.add({ pos, scale: [44, 0.25, 44], color: LEVEL_RGB[lvl], emissive: 0.5, alpha: 0.22, visible });  // visível de longe
+      const ring = r.add({ pos, scale: [20, 0.25, 20], color: LEVEL_RGB[lvl], emissive: 0.5, alpha: 0.22, visible });  // visível de longe
       const b = r.add({ pos, scale: [9, h, 9], color: [0.10, 0.15, 0.27], win: 1, edge: 1, visible, pick: { kind: "partner", id: p.id, data: p } });
       r.add({ pos: add3(pos, [0, h + 1.6, 0]), scale: [9.6, 0.25, 9.6], color: [0.37, 0.92, 0.83], emissive: 0.7, alpha: 0.35, visible });
       const beacon = r.add({ pos: add3(pos, [0, h, 0]), scale: [4, 1.6, 4], color: LEVEL_RGB[lvl], emissive: 0.9, visible, pick: { kind: "status", id: p.id, data: p } });
@@ -202,7 +205,7 @@ export class World {
       const ab = p.units.reduce((a, u) => a + ((u.ops || {}).abertas || 0), 0), fe = p.units.reduce((a, u) => a + ((u.ops || {}).feitas_30d || 0), 0);
       const opsTxt = ab || fe ? ` · ${ab} aberta(s) · ${fe} feita(s) 30d` : "";
       this._label("partner:" + p.id, `<span class="sw" style="background:rgb(${LEVEL_RGB[lvl].map(x => x * 255 | 0)})"></span>${esc(p.name)} <small>· ${statusText(lvl)}${opsTxt}${approx ? " · local a definir" : ""}</small>`,
-        add3(pos, [0, h + 4, 0]), { kind: "partner", id: p.id }, false, () => this._passes(p), null, [0, 4500]);
+        add3(pos, [0, h + 4, 0]), { kind: "partner", id: p.id }, false, () => this._passes(p), null, [0, 4500 * F]);
       const wh = data.warehouses.find(w => w.region_code === p.region_code), whm = wh && this.objs.get("warehouse:" + wh.id);
       r.lines.push({ a: whm ? add3(whm.pos, [0, 7, 0]) : add3(HQ, [0, 40, 0]), b: add3(pos, [0, 2, 0]), color: [0.65, 0.55, 0.98, visible ? 0.35 : 0.05] });
     });
@@ -257,14 +260,24 @@ export class World {
     el.setAttribute("aria-label", el.textContent);
     el.addEventListener("click", ev => { ev.stopPropagation(); this.h.onSelect(pick.kind, pick.id, pick); });
     this.labelsEl.appendChild(el);
-    const L = { key, el, p, small, visibleFn, cls, range: range || (small ? [0, 700] : [0, 4500]) }; this.labels.push(L); return L;
+    const L = { key, el, p, small, visibleFn, cls, range: range || (small ? [0, 700] : [0, 4500 * F]) }; this.labels.push(L); return L;
   }
+  // Rótulos sem sobreposição: os mais importantes ficam; os demais aparecem ao aproximar.
   _placeLabels() {
-    const d = this.r.cam.dist;
+    const d = this.r.cam.dist, cand = [];
     for (const L of this.labels) {
       const vis = (!L.visibleFn || L.visibleFn()) && !(this.r.lite && L.cls === "agent") && d >= L.range[0] && d <= L.range[1];
       const s = vis ? this.r.project(L.p) : null;
       if (!s) { L.el.style.display = "none"; continue; }
+      cand.push([L, s]);
+    }
+    cand.sort((a, b) => labelPrio(b[0]) - labelPrio(a[0]) || a[1].depth - b[1].depth);
+    const placed = [];
+    for (const [L, s] of cand) {
+      if (L.w === undefined) { L.el.style.display = ""; L.w = L.el.offsetWidth; L.h = L.el.offsetHeight; }  // mede uma vez
+      const r = [s.x - L.w / 2 - 2, s.y - L.h - 2, s.x + L.w / 2 + 2, s.y + 2];
+      if (labelPrio(L) < 11 && placed.some(q => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1])) { L.el.style.display = "none"; continue; }
+      placed.push(r);
       L.el.style.display = ""; L.el.style.left = s.x + "px"; L.el.style.top = s.y + "px"; L.el.style.zIndex = String(1000 - Math.round(s.depth * 500));
     }
   }
@@ -279,11 +292,11 @@ export class World {
   }
   flyBox(b, pitch = 1.05) {
     const w = (b[2] - b[0]) * K, h = (b[3] - b[1]) * K;
-    this.fly(ll((b[1] + b[3]) / 2, (b[0] + b[2]) / 2), Math.min(12000, Math.max(160, Math.max(w, h) * 1.15)), pitch, 0);
+    this.fly(ll((b[1] + b[3]) / 2, (b[0] + b[2]) / 2), Math.min(12000 * F, Math.max(160, Math.max(w, h) * 1.15)), pitch, 0);
   }
   focus(kind, id, extra) {
-    if (kind === "global") { const c = this.HQ || [0, 0, 0]; return this.fly([c[0] + 30 * K, 0, c[2] - 25 * K], 9500, 1.2, 0); }
-    if (kind === "region") { const c = this.countryByRegion(id); if (c) return this.flyBox(c.bbox); const cc = (this.data.country_center || {})[id]; if (cc) this.fly(ll(cc[0], cc[1]), 2500, 1.05, 0); return; }
+    if (kind === "global") { const c = this.HQ || [0, 0, 0]; return this.fly([c[0] + 30 * K, 0, c[2] - 25 * K], 9500 * F, 1.2, 0); }
+    if (kind === "region") { const c = this.countryByRegion(id); if (c) return this.flyBox(c.bbox); const cc = (this.data.country_center || {})[id]; if (cc) this.fly(ll(cc[0], cc[1]), 2500 * F, 1.05, 0); return; }
     if (kind === "country") { const c = this.countries.find(x => x.name === id); if (c) this.flyBox(c.bbox); return; }
     if (kind === "state") { if (extra && extra.bbox) this.flyBox(extra.bbox, 0.95); return; }
     if (kind === "partner") { const b = this.objs.get("partner:" + id); if (b) this.fly(add3(b.home, [0, b.h / 2, 0]), 70, 0.45); return; }
