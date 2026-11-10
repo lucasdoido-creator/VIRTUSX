@@ -908,7 +908,11 @@ async function openCountry(name) {
       <div class="muted">${p.units.map(u => `${esc(u.name)} (${esc(u.city || "")}/${esc(u.state || "")})`).join(" · ")}</div></div>`).join("") || `<p class="muted">Nenhum.</p>`}
     ${bases.length ? `<h4>Bases / filiais (${bases.length})</h4>${bases.map(b => `<div class="card click" data-b="${b.id}" style="cursor:pointer">Base · ${esc(b.name)} <span class="muted">${esc(b.city || "")}/${esc(b.state || "")}</span></div>`).join("")}` : ""}
     ${whs.length ? `<h4>Armazéns</h4>${whs.map(w => `<div>${esc(w.name)} · ${esc(w.city || "")}</div>`).join("")}` : ""}`;
+  let first = true;
   const render = sts => {
+    // desenhos seguintes (estados chegando) só se o painel do país ainda estiver aberto — nunca cobre outro painel
+    if (!first && (!S.panel || S.panel.title !== esc(c.name_pt || name))) return;
+    first = false;
     const keep = document.querySelector("#expBox");   // 2º desenho (quando os estados chegam) mantém o formulário já aberto/preenchido
     const reuse = keep && keep.dataset.country === name && keep.childElementCount && !$("#panel").classList.contains("hidden");
     openPanel({ title: esc(c.name_pt || name), sub: badge("mapa real · Natural Earth"), html: head + `<div id="expBox"></div><h4>Estados / províncias</h4>${sts}`, reload: null });
