@@ -28,8 +28,12 @@ class BrainUnavailable(AppError):
         super().__init__(f"Cérebro de IA indisponível: {why}", "cerebro_indisponivel", 503)
 
 
-def day_spend_usd():
-    return R.db.val("SELECT COALESCE(SUM(cost_usd),0) FROM brain_usage WHERE at>=?", now().strftime("%Y-%m-%dT00:00:00")) or 0.0
+def _pf(profile):   # gasto separado: monitor (chave própria) x CEOs
+    return ("purpose LIKE 'monitor.%'" if profile == "monitor" else "purpose NOT LIKE 'monitor.%'")
+
+
+def day_spend_usd(profile="padrao"):
+    return R.db.val(f"SELECT COALESCE(SUM(cost_usd),0) FROM brain_usage WHERE at>=? AND {_pf(profile)}", now().strftime("%Y-%m-%dT00:00:00")) or 0.0
 
 
 def _maybe_alert():
@@ -52,9 +56,9 @@ def _maybe_alert():
             "description": "Ao atingir o teto, o sistema continua apenas com IA grátis e regras. Ajuste BRAIN_MONTHLY_CAP_USD se quiser."})
 
 
-def month_spend_usd():
+def month_spend_usd(profile="padrao"):
     start = now().strftime("%Y-%m-01T00:00:00")
-    return R.db.val("SELECT COALESCE(SUM(cost_usd),0) FROM brain_usage WHERE at>=?", start) or 0.0
+    return R.db.val(f"SELECT COALESCE(SUM(cost_usd),0) FROM brain_usage WHERE at>=? AND {_pf(profile)}", start) or 0.0
 
 
 def _http_post(url, payload, headers=None, timeout=120):
@@ -105,7 +109,7 @@ def _probe(key):
                      headers={"x-api-key": key, "anthropic-version": "2023-06-01"}).status_code
 
 
-def set_api_key(actor, key, remove=False):
+def set_api_key(actor, key, remove=False, which="padrao"):
     """Chave colada pela tela (só administrador): testa sem custo e só grava se a Anthropic aceitar.
     Grava em config.local.env (fica só neste computador) e passa a valer na hora. Nunca devolve a chave."""
     from . import config
@@ -132,12 +136,17 @@ def set_api_key(actor, key, remove=False):
             raise AppError(f"A Anthropic recusou esta chave ({code}). Nada foi alterado. Gere outra em console.anthropic.com → API Keys.", "chave_recusada")
         if code != 200:
             raise AppError(f"Resposta inesperada da Anthropic ({code}). Nada foi alterado; tente de novo.", "chave_nao_testada")
-    config.write_local_env("ANTHROPIC_API_KEY", key or None)
-    R.settings.anthropic_api_key = key
-    _key_state.update(at=time.time(), result={"nivel": "verde", "detalhe": "chave aceita pela Anthropic (teste sem custo)"} if key else None)
+    if which == "monitor":   # chave separada do Sentinela (gasto e teto próprios)
+        config.write_local_env("MONITOR_ANTHROPIC_API_KEY", key or None)
+        R.settings.monitor_api_key = key
+    else:
+        config.write_local_env("ANTHROPIC_API_KEY", key or None)
+        R.settings.anthropic_api_key = key
+        _key_state.update(at=time.time(), result={"nivel": "verde", "detalhe": "chave aceita pela Anthropic (teste sem custo)"} if key else None)
     masked = f"{key[:7]}…{key[-4:]}" if key else None
     with R.db.tx() as c:
-        audit(c, actor, "claude.chave_atualizada" if key else "claude.chave_removida", "settings", "anthropic_api_key", None, {"chave": masked})
+        audit(c, actor, ("claude.chave_atualizada" if key else "claude.chave_removida") + (".monitor" if which == "monitor" else ""), "settings",
+              "monitor_api_key" if which == "monitor" else "anthropic_api_key", None, {"chave": masked})
     return {"ok": True, "chave": masked, "configurada": bool(key)}
 
 
@@ -180,10 +189,10 @@ def _call_ollama(system, user, max_tokens, json_mode, tier="rotina"):
     return data["message"]["content"], int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0), 0.0
 
 
-def _call_claude(system, user, max_tokens, model):
+def _call_claude(system, user, max_tokens, model, key=None):
     payload = {"model": model, "max_tokens": max_tokens, "system": system, "messages": [{"role": "user", "content": user}]}
     fn = TRANSPORT["claude"] or (lambda p: _http_post("https://api.anthropic.com/v1/messages", p, {
-        "x-api-key": R.settings.anthropic_api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, 90))
+        "x-api-key": key or R.settings.anthropic_api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}, 90))
     data = fn(payload)
     tin, tout = data["usage"]["input_tokens"], data["usage"]["output_tokens"]
     pin, pout = PRICES_USD_PER_MTOK.get(model, (4.0, 20.0))
@@ -202,11 +211,20 @@ def _record(provider, model, tier, purpose, partner_id, tin, tout, cost, ok, err
                   (iso(), provider, model, tier, purpose, partner_id, tin, tout, cost, 1 if ok else 0, (error or "")[:300] or None))
 
 
-def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=900, json_mode=True, validate=None):
-    """Retorna {text, data (se JSON), provider, model, cost_usd, tokens_in, tokens_out}. Nunca chamar dentro de transação."""
+def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=900, json_mode=True, validate=None, profile="padrao"):
+    """Retorna {text, data (se JSON), provider, model, cost_usd, tokens_in, tokens_out}. Nunca chamar dentro de transação.
+    profile="monitor": usa a chave separada do monitor e o teto dele (MONITOR_*), com a IA local como reserva."""
     order = []
-    claude_ok = bool(R.settings.anthropic_api_key)
-    if tier == "decisao":
+    mon = profile == "monitor"
+    if mon and not purpose.startswith("monitor."):
+        purpose = "monitor." + purpose
+    key = R.settings.monitor_api_key if mon else R.settings.anthropic_api_key
+    cap_m = R.settings.monitor_monthly_cap_usd if mon else R.settings.brain_monthly_cap_usd
+    cap_d = R.settings.monitor_daily_cap_usd if mon else R.settings.brain_daily_cap_usd
+    claude_ok = bool(key)
+    if mon:
+        order = (["claude"] if claude_ok else []) + ["ollama"]
+    elif tier == "decisao":
         order.append("ollama")
         if claude_ok:
             order.append("claude")
@@ -231,20 +249,20 @@ def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=9
         else:
             model = R.settings.decision_model
             est = _estimate_claude(model, system, user, max_tokens)
-            if month_spend_usd() + est > R.settings.brain_monthly_cap_usd:
-                reasons.append(f"teto mensal de US$ {R.settings.brain_monthly_cap_usd:.2f} atingido")
+            if month_spend_usd(profile) + est > cap_m:
+                reasons.append(f"teto mensal de US$ {cap_m:.2f} atingido")
                 continue
-            if day_spend_usd() + est > R.settings.brain_daily_cap_usd:
-                reasons.append(f"teto diário de US$ {R.settings.brain_daily_cap_usd:.2f} atingido")
+            if day_spend_usd(profile) + est > cap_d:
+                reasons.append(f"teto diário de US$ {cap_d:.2f} atingido")
                 continue
             try:
-                text, tin, tout, cost = _call_claude(system, user, max_tokens, model)
+                text, tin, tout, cost = _call_claude(system, user, max_tokens, model, key)
             except Exception as e:
                 _record("claude", model, tier, purpose, partner_id, 0, 0, 0.0, False, str(e))
                 reasons.append(f"Claude falhou: {type(e).__name__}")
                 continue
         _record(prov, model, tier, purpose, partner_id, tin, tout, cost, True)
-        if prov == "claude":
+        if prov == "claude" and not mon:
             _maybe_alert()
         out = {"text": text, "provider": prov, "model": model, "cost_usd": cost, "tokens_in": tin, "tokens_out": tout, "data": None}
         if json_mode:

@@ -65,6 +65,29 @@ AGENT_DEFS = [
         "ferramentas": ["cerebro.rotina (Ollama local)"], "dados_permitidos": ["catálogo autorizado do parceiro"], "dados_proibidos": ["dados pessoais"],
         "limites": "Gera apenas RASCUNHOS; nunca publica nem promete preço/prazo.", "gatilhos": ["tarefa atribuída pelo CEO"],
         "frequencia": "a cada 30 min", "orcamento": "grátis (IA local)", "encaminhamento_humano": "Todo rascunho exige revisão humana."}},
+    {"code": "juridico", "name": "Lia · Jurídico e conformidade", "role": "Jurídico", "enabled": 1, "freq_min": 30, "budget": 0, "config": {
+        "ferramentas": ["catalogo.paises", "pesquisa.noticias (idioma do país)"], "dados_permitidos": ["regras públicas do país", "configuração do mercado"],
+        "dados_proibidos": ["dados pessoais"], "limites": "Levanta regras; NÃO emite parecer, não assina nem registra nada. Sempre cria revisão por advogado local.",
+        "gatilhos": ["tarefa do CEO do mercado"], "frequencia": "a cada 30 min", "orcamento": "grátis",
+        "encaminhamento_humano": "Toda conclusão jurídica exige advogado do país."}},
+    {"code": "localizacao", "name": "Leo · Localização e site", "role": "Localização", "enabled": 1, "freq_min": 30, "budget": 0, "config": {
+        "ferramentas": ["cerebro.rotina (tradução/redação)", "site.rascunho"], "dados_permitidos": ["configuração do mercado"], "dados_proibidos": ["dados pessoais"],
+        "limites": "Gera rascunho do site; publicar exige aprovação (mercado.publicar_site). Não inventa endereço nem números.",
+        "gatilhos": ["tarefa do CEO do mercado"], "frequencia": "a cada 30 min", "orcamento": "grátis (IA local)", "encaminhamento_humano": "Publicação."}},
+    {"code": "marketing", "name": "Mia · Marketing e anúncios", "role": "Marketing", "enabled": 1, "freq_min": 30, "budget": 0, "config": {
+        "ferramentas": ["cerebro.rotina", "anuncios.rascunho"], "dados_permitidos": ["configuração do mercado"], "dados_proibidos": ["dados pessoais"],
+        "limites": "Só rascunhos. Gasto real só via política campanha.paga.", "gatilhos": ["tarefa do CEO do mercado"],
+        "frequencia": "a cada 30 min", "orcamento": "grátis (IA local)", "encaminhamento_humano": "Qualquer verba."}},
+    {"code": "vendas", "name": "Vitor · Vendas e plataformas", "role": "Vendas", "enabled": 1, "freq_min": 30, "budget": 0, "config": {
+        "ferramentas": ["catalogo.paises (plataformas)"], "dados_permitidos": ["configuração do mercado"], "dados_proibidos": ["credenciais de plataformas"],
+        "limites": "Mapeia plataformas e prepara o caminho; não cria contas nem publica.", "gatilhos": ["tarefa do CEO do mercado"],
+        "frequencia": "a cada 30 min", "orcamento": "grátis", "encaminhamento_humano": "Abrir conta de vendedor."}},
+    {"code": "monitor", "name": "Sentinela · Segurança", "role": "Monitor de segurança", "enabled": 1, "freq_min": 1440, "budget": 500, "config": {
+        "ferramentas": ["verificacoes.locais", "osv.dev (vulnerabilidades)", "pypi (versões)", "cerebro.monitor (chave própria, teto US$ 5/mês)"],
+        "dados_permitidos": ["configuração técnica", "versões de pacotes", "contagens de eventos"], "dados_proibidos": ["dados de clientes", "valores de chaves"],
+        "limites": "Vigia e PROPÕE correções; nunca altera código, banco ou configuração sozinho. Correção só após testes e sua aprovação.",
+        "gatilhos": ["diário", "execução manual"], "frequencia": "diária", "orcamento": "US$ 5/mês (chave separada)",
+        "encaminhamento_humano": "Toda correção proposta."}},
     {"code": "parceiros", "name": "Fábio · Parceiros", "role": "Parceiros", "enabled": 0, "freq_min": 60, "budget": 3000, "config": {
         "ferramentas": ["parceiros.consultar", "vitrines.sugerir"], "dados_permitidos": ["cadastro do parceiro solicitante"],
         "dados_proibidos": ["dados de outros parceiros"], "limites": "Planejado para Etapa 5.", "gatilhos": ["pergunta do parceiro"],
@@ -287,6 +310,10 @@ def r_financeiro(run):
     prepared = []
     for t in _pick_assigned_tasks(run):
         _start_task(run, t)
+        if (t.get("related_entity") or "").startswith("market:"):
+            from .mercados import finance_note
+            deliver(c, run.actor, t["id"], finance_note(c, t))
+            continue
         if _is_venture(t):
             from .ceo import deterministic_deliverable
             deliver(c, run.actor, t["id"], deterministic_deliverable(c, "financeiro", t))
@@ -404,6 +431,15 @@ def get_routine(code):
     if code.startswith("base_"):
         from . import gerente
         return gerente.r_base
+    if code.startswith("mkt_"):
+        from . import mercados
+        return mercados.r_market_ceo
+    if code in ("juridico", "localizacao", "marketing", "vendas"):
+        from . import mercados
+        return getattr(mercados, "r_" + code)
+    if code == "monitor":
+        from . import monitor
+        return monitor.r_monitor
     return {**ROUTINES, "pesquisa": ceo.r_pesquisa, "conteudo": ceo.r_conteudo}[code]
 
 

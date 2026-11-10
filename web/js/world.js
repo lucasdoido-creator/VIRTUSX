@@ -22,7 +22,7 @@ export const FLOORS = [["recepcao", "Recepção"], ["comercial", "Comercial"], [
 const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const COUNTRY_PT = { Brazil: "Brasil", Portugal: "Portugal", "United States of America": "Estados Unidos" };
 
-const LABEL_PRIO = { floor: 11, region: 10, hq: 9, base: 8.5, partner: 8, freelancer: 5.5, unit: 6, warehouse: 5, sector: 4, estado: 3, agent: 2 };
+const LABEL_PRIO = { floor: 11, region: 10, hq: 9, market: 8.7, base: 8.5, partner: 8, freelancer: 5.5, unit: 6, warehouse: 5, sector: 4, estado: 3, agent: 2 };
 const labelPrio = L => L.prio ?? (L.prio = (L.cls || "").includes("ceo") ? 4.5 : (LABEL_PRIO[L.key.split(":")[0]] ?? 1));
 const loadImg = src => new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = src; });
 function pip(lon, lat, ring) {  // ponto no polígono (anel achatado [lon,lat,...])
@@ -139,7 +139,7 @@ export class World {
   }
   build(data) {
     data.hq = data.hq && data.hq.lat != null ? data.hq : { lat: -23.5505, lng: -46.6333 };
-    for (const k of ["partners", "warehouses", "service_bases", "regions", "sectors", "agents"]) data[k] = data[k] || [];
+    for (const k of ["partners", "warehouses", "service_bases", "regions", "sectors", "agents", "markets"]) data[k] = data[k] || [];
     this.data = data; const r = this.r; r.clear(); this.objs.clear(); this.occ = new Set();
     this.labelsEl.innerHTML = ""; this.labels = [];
     r.add({ pos: [0, -1, 0], scale: [360 * K + 4000, 1, 180 * K + 4000], color: [0.02, 0.04, 0.10], tex: 1 });
@@ -212,6 +212,20 @@ export class World {
           add3(hp, [0, 9, 0]), fp, true);
       });
     }));
+    (data.markets || []).forEach(mk => this._safe("mercado", () => {
+      // Mercado internacional: torre holográfica na capital (presença REMOTA — não é escritório físico)
+      if (mk.lat == null) return;
+      const pos = this._place(ll(mk.lat, mk.lng)), pick = { kind: "market", id: mk.id, data: mk }, on = mk.status === "ativo";
+      const col = on ? [0.37, 0.92, 0.83] : [0.55, 0.65, 1.0], pr = mk.progresso || { total: 0, feitas: 0 };
+      r.add({ pos, scale: [26, 0.3, 26], color: col, emissive: 0.6, alpha: 0.18 });
+      r.add({ pos, scale: [8, 26, 8], color: col, emissive: 0.45, alpha: 0.35, edge: 1, winColor: col, pick });
+      r.add({ pos: add3(pos, [0, 26, 0]), scale: [3, 3, 3], color: [0.98, 0.80, 0.30], emissive: 1.0, pick });
+      if (pr.total) r.add({ pos: add3(pos, [6, 0, 0]), scale: [1.4, 1 + 20 * pr.feitas / pr.total, 1.4], color: LEVEL_RGB.verde, emissive: 0.9 });
+      r.lines.push({ a: add3(HQ, [0, 40, 0]), b: add3(pos, [0, 26, 0]), color: [...col, 0.35] });
+      this.objs.set("market:" + mk.id, { pos, home: pos, h: 26 });
+      this._label("market:" + mk.id, `<span class="sw" style="background:#9fb3ff"></span>🌐 ${esc(mk.country)} <small>${esc(mk.marca || "")} · ${on ? "site no ar" : "expansão em andamento"} · remoto</small>`,
+        add3(pos, [0, 32, 0]), pick, false, null, null, [0, 14000 * F]);
+    }));
     for (const p of data.partners) this._safe("cliente", () => {
       p.units = p.units || []; p.status = p.status || { level: "cinza" };
       const u0 = p.units.find(u => u.lat != null) || p.units[0] || {};
@@ -263,6 +277,7 @@ export class World {
     for (const a of agents) {
       if (a.code && a.code.startsWith("ceo_")) { this._buildCEO(a); continue; }
       if (a.code && a.code.startsWith("base_")) { this._buildBaseCEO(a); continue; }
+      if (a.code && a.code.startsWith("mkt_")) { this._buildMarketCEO(a); continue; }
       const target = this._agentTarget(a); const prev = this.agentPos.get(a.id) || target; const cur = { x: prev[0], z: prev[2] };
       const col = AGENT_RGB[a.status] || AGENT_RGB.disponivel; const alpha = a.enabled ? 1 : 0.45;
       const body = this.r.add({ pos: [cur.x, 0.6, cur.z], scale: [1.8, 3.4, 1.8], color: col, emissive: a.status === "executando" ? 0.6 : 0.15, alpha, pick: { kind: "agent", id: a.id, data: a } });
@@ -288,6 +303,14 @@ export class World {
     this.objs.set("agent:" + a.id, body); this.objs.set("ceo:" + pid, body);
     this._label("agent:" + a.id, `<span class="sw" style="background:rgb(${col.map(x => x * 255 | 0)})"></span>${esc(a.name)} <small>· ${AGENT_LABEL[a.status] || a.status}</small>`,
       add3(top, [0, 9.5, 0]), { kind: "agent", id: a.id }, true, null, "agent ceo");
+  }
+  _buildMarketCEO(a) {
+    const mk = this.objs.get("market:" + a.code.slice(4)); if (!mk) return;
+    const col = AGENT_RGB[a.status] || AGENT_RGB.disponivel, top = add3(mk.pos, [0, 29, 0]), pk = { kind: "agent", id: a.id, data: a };
+    const body = this.r.add({ pos: top, scale: [2.4, 4.2, 2.4], color: [0.95, 0.78, 0.30], emissive: a.status === "executando" ? 0.9 : 0.35, pick: pk });
+    this.r.add({ pos: add3(top, [0, 4.3, 0]), scale: [1.9, 1.9, 1.9], color: [0.95, 0.96, 1.0], pick: pk });
+    this.r.add({ pos: add3(top, [0, 6.8, 0]), scale: [4.4, 0.3, 4.4], color: col, emissive: 1.0, alpha: 0.85 });
+    this.objs.set("agent:" + a.id, body);
   }
   // CEO da base: no heliponto da própria base; halo = status da última execução
   _buildBaseCEO(a) {
@@ -362,6 +385,7 @@ export class World {
     if (kind === "warehouse") { const m = this.objs.get("warehouse:" + id); if (m) this.fly(m.pos, 60, 0.6); }
     if (kind === "agent") { const m = this.objs.get("agent:" + id); if (m) this.fly(m.pos, 40, 0.5); }
     if (kind === "freelancer") { const m = this.objs.get("freelancer:" + id); if (m) this.fly(m.pos, 45, 0.6); }
+    if (kind === "market") { const m = this.objs.get("market:" + id); if (m) this.fly(add3(m.pos, [0, 12, 0]), 160, 0.7); }
   }
   // "Entrar" no prédio: o volume fica translúcido e os andares se separam, cada um clicável.
   enterBuilding(pid, instant) {

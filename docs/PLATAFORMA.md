@@ -243,6 +243,23 @@ Dica: para precisão total, copie as coordenadas do Google Maps (clique direito 
 - `config.local.env` tem prioridade sobre uma variável `ANTHROPIC_API_KEY` antiga do Windows; aspas e espaços em volta do valor são ignorados.
 - Agente que recebe tarefa com **checklist** (trabalho físico) entrega o que pode como comentário e deixa a tarefa "aguardando terceiro" para uma pessoa — não fica falhando em loop.
 
+## 7.8 Etapa 2 — Expansão internacional e Sentinela
+
+**Expansão por país** (só administrador cria; operações vê): clique num país no mapa → *🌐 Expandir para este país* → marca, oferta, contato e preço local (idioma e moeda vêm do catálogo de ~60 países; fora dele, você informa). O sistema cria o **mercado** e o **CEO do país**, que pesquisa notícias no idioma local, escreve a estratégia (IA local → Claude com teto; sem IA, regras) e divide o trabalho:
+- **Lia · Jurídico** — lei de dados, imposto sobre consumo, consumidor, registro, cookies (UE), Impressum (Alemanha). **Não é parecer**: sempre abre "Revisão por advogado local" para você.
+- **Leo · Localização** — site do país no idioma e moeda locais (rascunho).
+- **Mia · Marketing** — rascunhos de anúncios Google/Meta/marketplace com limites de caracteres; verba só via política `campanha.paga`.
+- **Vitor · Vendas** — plataformas fortes no país (Mercado Livre, Amazon, Allegro, Bol.com, Rakuten, Shopee…) e passos; não cria contas.
+- **Carla · Financeiro** — moeda, preço local (sem conversão inventada), imposto e meios de pagamento comuns.
+
+**Presença remota, sem enganação**: o mapa mostra uma torre holográfica na capital ("remoto"); o site diz "atendimento remoto" e o JSON-LD não inventa endereço. Não criamos IP nem endereço falso. O Google encontra pelo idioma, `hreflang`, `sitemap.xml` e domínio — configure `PUBLIC_BASE_URL` com um endereço público. Presença física só quando houver endereço real.
+
+**Publicação**: prévia em `/m/<slug>` (só equipe, `noindex`); publicar exige aprovação (`mercado.publicar_site`). Depois: `/m/<slug>`, `/sitemap.xml`, `/robots.txt`.
+
+**Sentinela · monitor de segurança** (Saúde → Sentinela; diário ou "Rodar agora"): vulnerabilidades conhecidas nos pacotes (OSV.dev), versões novas (PyPI), segredos no arquivo de modelo, `.gitignore`, integridade do banco, cópia atrasada, força bruta no login, servidor exposto, erros de tela. Usa **chave separada** (`MONITOR_ANTHROPIC_API_KEY`, colável pela tela) com **teto de US$ 5/mês**, gasto separado dos CEOs; sem chave usa a IA local. **Só propõe**: achado alto/crítico vira uma solicitação `sistema.corrigir`; aprovada, abre issue no GitHub com `@claude` (a automação cria o PR, os testes rodam e você decide o merge) se `MONITOR_GITHUB_TOKEN`/`MONITOR_GITHUB_REPO` estiverem configurados; senão, a correção fica descrita.
+
+**Login protegido**: após 10 senhas erradas em 5 min do mesmo endereço, bloqueio de 5 min; tentativas contam para o Sentinela.
+
 ## 8. Como executar e acessar
 
 **Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
@@ -262,7 +279,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **102 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **108 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`, `test_mercados_monitor`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

@@ -19,7 +19,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from .config import ROOT, load_settings
-from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, hash_token, new_token, verify_password
+from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, emit, hash_token, new_token, verify_password
 from .db import DB, iso, loads, now
 from datetime import timedelta
 from . import agents, brain, ceo, channels, closings, commands, commerce, ops, policies, registry, saude, seed, tasks
@@ -76,13 +76,23 @@ def T(fn, *a, **kw):
 
 
 # ------------------------------------------------------------------ autenticação
+_LOGIN_FAILS: dict = {}
 @endpoint
 async def login(req):
     b = await body(req)
+    ip = req.client.host if req.client else "?"
+    t = time.time()
+    fails = [x for x in _LOGIN_FAILS.get(ip, []) if t - x < 300]
+    if len(fails) >= 10:   # proteção contra tentativa de adivinhar senha
+        raise AppError("Muitas tentativas de login. Aguarde 5 minutos.", "muitas_tentativas", 429)
     u = R.db.one("SELECT * FROM users WHERE email=? AND active=1", (b.get("email") or "").strip().lower())
     if not u or not verify_password(b.get("password") or "", u["password_hash"]):
+        _LOGIN_FAILS[ip] = fails + [t]
+        with R.db.tx() as c:
+            emit(c, "sessao.falha_login", "auth", status="falhou", payload={"origem": "local" if ip in ("127.0.0.1", "::1", "testclient") else "rede"})
         await asyncio.sleep(0.3)
         raise AppError("E-mail ou senha inválidos", "credenciais_invalidas", 401)
+    _LOGIN_FAILS.pop(ip, None)
     tok = new_token()
     with R.db.tx() as c:
         c.execute("INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)",
@@ -421,6 +431,56 @@ def _geo_tile(req, p, b):
 
 def _channels(req, p, b): return channels.channels_overview(p)
 def _saude(req, p, b): return saude.overview(p, bool(req.query_params.get("agora")))
+def _chave_monitor(req, p, b):
+    from . import brain
+    return brain.set_api_key(p, b.get("key"), remove=bool(b.get("remove")), which="monitor")
+def _monitor(req, p, b):
+    from . import monitor
+    return monitor.overview(p)
+def _pais(req, p, b):
+    p.require("mercados.read")
+    from . import paises
+    info = paises.lookup(req.path_params["nome"])
+    m = R.db.one("SELECT id FROM markets WHERE status!='encerrado' AND (iso2=? OR country=?)", (info or {}).get("iso2"), (info or {}).get("name_pt") or req.path_params["nome"])
+    return {"info": info, "mercado_id": m["id"] if m else None}
+def _mercados(req, p, b):
+    from . import mercados
+    return mercados.list_markets(p)
+def _mercado_new(req, p, b):
+    from . import mercados, agents
+    m = mercados.create_market(p, b)
+    try:
+        agents._dispatch(mercados.ceo_code(m["id"]), "criacao")   # CEO começa na hora (em segundo plano)
+    except AppError:
+        pass
+    return mercados.get_market(p, m["id"])
+def _mercado(req, p, b):
+    from . import mercados
+    return mercados.get_market(p, req.path_params["id"])
+
+
+async def market_page(req):
+    from . import mercados
+    try:
+        pr = principal(req)
+        prev = pr if pr.can("mercados.read") else None
+    except AppError:
+        prev = None
+    html_ = await run_in_threadpool(mercados.render_site, req.path_params["slug"], prev)
+    if html_ is None:
+        return Response("Página não encontrada", status_code=404, media_type="text/plain; charset=utf-8")
+    return Response(html_, media_type="text/html; charset=utf-8")
+
+
+async def sitemap_xml(req):
+    from . import mercados
+    return Response(await run_in_threadpool(mercados.sitemap), media_type="application/xml")
+
+
+async def robots_txt(req):
+    return Response("User-agent: *\nAllow: /m/\nDisallow: /api/\nSitemap: /sitemap.xml\n", media_type="text/plain")
+
+
 def _chave_claude(req, p, b):
     from . import brain
     return brain.set_api_key(p, b.get("key"), remove=bool(b.get("remove")))
@@ -563,6 +623,7 @@ def create_app(**overrides):
     settings = load_settings(**overrides)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     R.settings = settings
+    _LOGIN_FAILS.clear()
     R.db = DB(settings.db_path)
     R.db.init()
     with R.db.tx() as c:
@@ -625,7 +686,11 @@ def create_app(**overrides):
         Route("/api/conversations/{id}/link", P(_conv_link), methods=["POST"]), Route("/api/demo/whatsapp-inbound", P(_wa_sim), methods=["POST"]),
         Route("/api/commands/parse", P(_cmd_parse), methods=["POST"]), Route("/api/commands/execute", P(_cmd_exec), methods=["POST"]),
         Route("/api/geo/countries", P(_geo_countries)), Route("/api/geo/states", P(_geo_states)),
-        Route("/api/saude", P(_saude)), Route("/api/sistema/chave-claude", P(_chave_claude), methods=["POST"]), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
+        Route("/api/saude", P(_saude)), Route("/api/sistema/chave-claude", P(_chave_claude), methods=["POST"]),
+        Route("/api/sistema/chave-monitor", P(_chave_monitor), methods=["POST"]), Route("/api/monitor", P(_monitor)),
+        Route("/api/paises/{nome}", P(_pais)), Route("/api/mercados", P(_mercados)), Route("/api/mercados", P(_mercado_new), methods=["POST"]),
+        Route("/api/mercados/{id}", P(_mercado)),
+        Route("/m/{slug}", market_page), Route("/sitemap.xml", sitemap_xml), Route("/robots.txt", robots_txt), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
         Route("/api/saude/erro-tela", client_error, methods=["POST"]),
         Route("/api/geo/imagem/mundo", P(_geo_img_world)), Route("/api/geo/imagem/regiao", P(_geo_img_box)),
         Route("/api/geo/tile/{z:int}/{x:int}/{y:int}", P(_geo_tile)),

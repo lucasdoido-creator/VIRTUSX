@@ -118,8 +118,10 @@ def world(actor: Principal):
         from . import gerente
         g = gerente.last_summary(b["id"])
         b["ceo"] = {"resumo": g["resumo"], "em": g["em"]} if g else None
-    from . import geo
+    from . import geo, mercados
+    mk = mercados.list_markets(actor) if actor.can("mercados.read") else []
     return {
+        "markets": mk,
         "hq": _hq(actor),
         "region_country": geo.REGION_COUNTRY, "country_center": geo.COUNTRY_CENTER, "geo": geo.status(),
         "service_bases": bases,

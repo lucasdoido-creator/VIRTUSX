@@ -80,6 +80,11 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:8002/api/health && break; sleep 1; done
           REQUIRE_REAL_MAP=1 node scripts/e2e_mapa_canais.mjs http://127.0.0.1:8002 /tmp/shots
           node scripts/e2e_navegacao.mjs http://127.0.0.1:8002 /tmp/shots
+      - name: E2E expansão internacional + Sentinela
+        run: |
+          (cd server && DATA_DIR=/tmp/exp-data setsid python -m uvicorn app.main:create_app --factory --port 8004 > /tmp/server-exp.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8004/api/health && break; sleep 1; done
+          node scripts/e2e_expansao.mjs http://127.0.0.1:8004 /tmp/shots
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -89,6 +94,7 @@ jobs:
             /tmp/server.log
             /tmp/server-prod.log
             /tmp/server-mapa.log
+            /tmp/server-exp.log
 
   notificar:
     name: Notificar falha

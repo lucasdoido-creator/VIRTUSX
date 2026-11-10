@@ -123,7 +123,7 @@ async function updateSaude() {
 async function openSaude(agora) {
   const d = await api("/api/saude" + (agora === true ? "?agora=1" : ""));
   const lvl = l => `<span class="st ${l}"><i></i></span>`;
-  openPanel({ title: "Saúde do sistema", sub: `${st(d.level)} · verificado ${fmtTime(d.checked_at)} · versão ${esc(d.build)}`, reload: () => openSaude(),
+  openPanel({ noAuto: true, title: "Saúde do sistema", sub: `${st(d.level)} · verificado ${fmtTime(d.checked_at)} · versão ${esc(d.build)}`, reload: () => openSaude(),
     html: `<p class="muted">Verificações automáticas a cada 5 minutos. Item vermelho gera alerta e uma pendência crítica para a central.</p>
       <table class="t"><tbody>${d.checks.map(c => `<tr><td>${lvl(c.level)}</td><td><b>${esc(c.title)}</b><div class="muted">${esc(c.detail)}</div>${c.auto ? `<div class="muted">Automático: ${esc(c.auto)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
       ${S.me.role === "admin_central" ? `<form class="f card" id="keyForm" autocomplete="off"><h4>Chave da Claude (reserva paga dos CEOs)</h4>
@@ -133,11 +133,27 @@ async function openSaude(agora) {
         <button class="btn small primary">Salvar e testar</button><button type="button" class="btn small" id="keyDel">Remover chave</button></div></form>` : ""}
       <div class="row" style="margin:10px 0"><button class="btn small primary" id="sdNow">Verificar agora</button>
       ${d.client_errors.some(e => !e.resolved) ? `<button class="btn small" id="sdRes">Marcar erros de tela como resolvidos</button>` : ""}</div>
+      <h4>Sentinela · monitor de segurança</h4><div id="sentBox" class="card"><p class="muted">Carregando…</p></div>
       <h4>Erros registrados na tela (navegador)</h4>
       ${d.client_errors.length ? d.client_errors.map(e => `<div class="card"><b>${esc(e.message)}</b> ${e.resolved ? badge("resolvido", "ok") : badge(e.count + "×", "warn")}
         <div class="muted mono">${esc(e.source || "")}${e.line ? ":" + e.line : ""} · ${esc(e.onde || "")} · tela ${esc(e.build || "?")} / servidor ${esc(e.server_build || "?")} · último ${fmtTime(e.last_at)}</div></div>`).join("") : `<p class="muted">Nenhum.</p>`}
       <h4>Cópias de segurança (data/backups)</h4>${d.backups.length ? d.backups.map(b => `<div class="muted mono">${esc(b.file)} · ${(b.bytes / 1e6).toFixed(1)} MB</div>`).join("") : `<p class="muted">Nenhuma ainda.</p>`}` });
   $("#sdNow").onclick = () => openSaude(true).then(updateSaude);
+  api("/api/monitor").then(mo => { const el = $("#sentBox"); if (!el) return;
+    const sev = { critica: "bad", alta: "bad", media: "warn", baixa: "", info: "" };
+    el.innerHTML = `<div class="muted">${mo.ultimo ? esc(mo.ultimo.summary) + " · " + fmtTime(mo.ultimo.finished_at) : "Ainda não rodou (roda 1x por dia)."}</div>
+      ${mo.achados.map(a => `<div style="margin:6px 0">${badge(a.severity, sev[a.severity])} <b>${esc(a.title)}</b><div class="muted">${esc(a.detail || "")}</div>
+        ${a.proposal ? `<div><i>Correção proposta:</i> ${esc(a.proposal)}</div>` : ""}</div>`).join("") || `<p>Nenhum problema aberto.</p>`}
+      <div class="muted">Chave própria: ${mo.chave.configurada ? esc(mo.chave.mascara) : "não configurada (usa a IA local)"} · gasto no mês US$ ${mo.gasto_mes_usd.toFixed(2)} de ${mo.teto_mes_usd.toFixed(2)}
+        · GitHub para correções: ${mo.github ? "configurado" : "não configurado (correções ficam descritas aqui)"}</div>
+      <div class="row" style="margin-top:6px">${can("agents.run") ? `<button class="btn small" id="sentRun">Rodar Sentinela agora</button>` : ""}</div>
+      ${S.me.role === "admin_central" ? `<form class="f" id="monKeyForm" autocomplete="off"><div class="row"><input name="key" type="password" autocomplete="new-password" spellcheck="false"
+        placeholder="chave separada do Sentinela (sk-ant-…)" style="flex:1;min-width:240px" aria-label="Chave da Claude do monitor"><button class="btn small primary">Salvar e testar</button></div></form>` : ""}`;
+    const sr = $("#sentRun"); if (sr) sr.onclick = () => act(() => api("/api/agents/monitor/run", { method: "POST" }), "Sentinela executou").then(() => openSaude(true));
+    const mk = $("#monKeyForm"); if (mk) mk.onsubmit = async e => { e.preventDefault(); const v = mk.key.value; mk.key.value = "";
+      try { const r = await api("/api/sistema/chave-monitor", { method: "POST", body: { key: v } }); toast(`Chave do Sentinela salva (${r.chave}). Teto: US$ 5/mês.`); openSaude(true); }
+      catch (er) { toast(er.message, true); } };
+  }).catch(() => {});
   const kf = $("#keyForm"); if (kf) {
     kf.onsubmit = async e => { e.preventDefault(); const v = kf.key.value; kf.key.value = "";   // some do campo na hora
       try { const r = await api("/api/sistema/chave-claude", { method: "POST", body: { key: v } }); toast(`Chave aceita e salva (${r.chave}). Os CEOs já podem usar a Claude.`); openSaude(true); }
@@ -184,7 +200,7 @@ function liveState(s, lostAt) {
   document.body.classList.toggle("stale", s !== "ao_vivo");
 }
 async function refresh(auto = false) {  // auto = disparado por evento: não apaga o que está sendo digitado
-  const busy = sel => auto && editing(sel);
+  const busy = sel => auto && (editing(sel) || (sel === "#pBody" && S.panel && S.panel.noAuto));
   try {
     if (S.me.role === "tecnico") {  // técnico não tem visão do mundo: só recarrega a tarefa e a lista
       if (S.panel && S.panel.reload && !busy("#pBody")) await reloadPanel();
@@ -199,7 +215,8 @@ async function refresh(auto = false) {  // auto = disparado por evento: não apa
 // Recarrega o painel aberto e ESPERA terminar: o próximo passo (ex.: abrir a tarefa recém-criada)
 // nunca é coberto por uma recarga antiga que chegou atrasada.
 async function reloadPanel() {
-  try { await S.panel.reload(); } catch (e) { if (e.status === 401) throw e; }
+  const target = S.panel; S.reloadTarget = target;   // recarga atrasada nunca reabre painel fechado nem cobre outro aberto depois
+  try { await target.reload(); } catch (e) { if (e.status === 401) throw e; } finally { if (S.reloadTarget === target) S.reloadTarget = null; }
 }
 // Nunca redesenhar por cima do que a pessoa está digitando (cadastro, resposta de WhatsApp…):
 // a área espera e é atualizada no próximo evento depois que o formulário for enviado ou limpo.
@@ -243,14 +260,17 @@ function select(kind, id, pick) {
   if (kind === "unit") return openUnit(pick.data);
   if (kind === "base") return openBase(pick.data || S.world.service_bases.find(b => b.id === id));
   if (kind === "freelancer") return openFreelancer(pick.data);
+  if (kind === "market") return openMarket(id);
   if (kind === "order") return openOrder(id);
   if (kind === "task") return openTask(id);
 }
 
 // ------------------------------------------------------------------ painel lateral
-function openPanel({ title, sub, html, tabs, tab, onTab, reload, partner }) {
+function openPanel({ title, sub, html, tabs, tab, onTab, reload, partner, noAuto }) {
+  const rt = S.reloadTarget;
+  if (rt && S.panel !== rt && title === rt.title && (!S.panel || S.panel.title !== title)) return;   // resultado de recarga velha: descarta
   const el = $("#panel"); const wasOpen = !!S.panel;
-  S.panel = { reload, partner };
+  S.panel = { reload, partner, noAuto, title };   // noAuto: painel não recarrega a cada evento (ex.: Saúde, que tem 'Verificar agora')
   $("#pTitle").innerHTML = title; $("#pSub").innerHTML = sub || "";
   const tb = $("#pTabs"); tb.innerHTML = ""; tb.classList.toggle("hidden", !tabs);
   (tabs || []).forEach(([code, name]) => { const b = document.createElement("button"); b.textContent = name; b.setAttribute("role", "tab");
@@ -610,6 +630,63 @@ function openBase(b) {
   const g = $("#goCad"); if (g) g.onclick = () => { closePanel(); S.tab = "cadastros"; setView("tabelas"); };
 }
 
+// ------------------------------------------------------------------ expansão internacional
+async function expandBox(country) {
+  const box = $("#expBox"); if (!box) return; box.dataset.country = country;
+  let d; try { d = await api(`/api/paises/${encodeURIComponent(country)}`); } catch { return; }
+  if (d.mercado_id) { box.innerHTML = `<div class="card click" id="goMkt">🌐 <b>Mercado ativo neste país</b> — abrir painel da expansão</div>`;
+    box.querySelector("#goMkt").onclick = () => openMarket(d.mercado_id); return; }
+  const i = d.info || {};
+  if (!can("mercados.write")) { box.innerHTML = ""; return; }
+  box.innerHTML = `<details class="card"><summary><b>🌐 Expandir para este país</b> <span class="muted">(CEO de IA + agentes por setor)</span></summary>
+    <p class="muted">Presença <b>remota</b>: site no idioma e moeda do país, anúncios e plataformas locais — sem endereço ou IP falso.
+    ${i.iso2 ? `Idioma ${esc(i.lang)} · moeda ${esc(i.currency)} · dados: ${esc(i.data_law)}.` : "País fora do catálogo: informe idioma e moeda."}</p>
+    <form class="f" id="mktForm"><div class="row"><label>Marca<input name="brand" required maxlength="80"></label>
+      <label>Idioma<input name="lang" value="${esc(i.lang || "")}" placeholder="ex.: de-DE" required size="7"></label>
+      <label>Moeda<input name="currency" value="${esc(i.currency || "")}" placeholder="EUR" required size="4" maxlength="3"></label>
+      <label>Preço inicial (moeda local, opcional)<input name="price" size="8"></label></div>
+      <label>O que você vende/oferece<textarea name="offer" rows="2" required minlength="8"></textarea></label>
+      <div class="row"><label>Público<input name="audience" placeholder="ex.: pequenas empresas"></label><label>E-mail de contato<input name="email" type="email"></label>
+      <label>WhatsApp<input name="whatsapp"></label><label>Teto de anúncios/mês (planejamento)<input name="ads_cap" size="8"></label></div>
+      <button class="btn primary small">Criar mercado e ativar CEO</button></form></details>`;
+  // procura o formulário dentro da própria caixa (o painel pode ter sido redesenhado)
+  box.querySelector("#mktForm").onsubmit = async e => { e.preventDefault(); const f = new FormData(e.target), b = Object.fromEntries(f.entries());
+    b.country = country; b.iso2 = i.iso2 || null;
+    const m = await act(() => api("/api/mercados", { method: "POST", body: b }), "Mercado criado — o CEO já começou a pesquisar e dividir o trabalho");
+    if (m) openMarket(m.id); };
+}
+const MKT_ST = { planejando: "planejando", em_execucao: "em execução", ativo: "site no ar", pausado: "pausado", encerrado: "encerrado" };
+const SETOR_LBL = { revisao_juridica: "Revisão por advogado (sua)", juridico: "Jurídico", localizacao: "Site / localização", marketing: "Anúncios", vendas: "Plataformas", financeiro: "Financeiro", estrategia: "Estratégia" };
+async function openMarket(id) {
+  const m = await api(`/api/mercados/${id}`);
+  const latest = k => m.itens.find(x => x.kind === k);
+  const est = latest("estrategia"), leg = latest("juridico"), ads = latest("marketing"), pl = latest("vendas"), fin = latest("financeiro");
+  const li = a => (a || []).map(x => `<li>${esc(x)}</li>`).join("");
+  const pub = m.publicacao;
+  openPanel({ title: `🌐 ${esc(m.country)} · ${esc(m.config.marca)}`, sub: `${badge(MKT_ST[m.status] || m.status, m.status === "ativo" ? "ok" : "")} ${badge("presença remota")} · ${esc(m.lang)} · ${esc(m.currency)}`,
+    reload: () => openMarket(id), html: `
+    <div class="bar" style="margin:6px 0"><i style="width:${m.progresso.total ? Math.round(100 * m.progresso.feitas / m.progresso.total) : 0}%"></i></div>
+    <div class="muted">${m.progresso.feitas}/${m.progresso.total} setor(es) entregue(s) pelos agentes</div>
+    <div class="row" style="margin:8px 0">${can("agents.run") ? `<button class="btn small primary" id="mkRun">Executar CEO agora</button>` : ""}
+      <a class="btn small" href="/m/${esc(m.slug)}" target="_blank" rel="noopener">${m.site_published ? "Abrir site publicado" : "Ver prévia do site"}</a>
+      ${pub ? badge("publicação: " + (pub.status === "aguardando_aprovacao" ? "aguardando sua aprovação" : pub.status), pub.status === "executada" ? "ok" : "warn") : ""}
+      ${pub && pub.status === "aguardando_aprovacao" ? `<button class="btn small" id="mkAppr">Aprovações</button>` : ""}</div>
+    ${m.site_published ? `<p class="muted">Endereço: <span class="mono">${esc(m.url)}</span>. Para o Google indexar, o servidor precisa de um endereço público (domínio ou túnel HTTPS) — configure PUBLIC_BASE_URL.</p>` : ""}
+    <h4>Setores</h4><table class="t"><tbody>${m.tarefas.map(t => `<tr class="click" data-task="${t.id}"><td>${esc(SETOR_LBL[t.related_entity.split(":")[2]] || t.related_entity.split(":")[2])}</td>
+      <td>${esc(t.title)}</td><td>${badge(TASK_STATES[t.status] || t.status, t.status === "concluida" ? "ok" : "")}</td></tr>`).join("") || `<tr><td class="muted">O CEO ainda está planejando…</td></tr>`}</tbody></table>
+    ${est ? `<h4>Estratégia <span class="muted">(${esc(est.body.fonte)})</span></h4><p>${esc(est.body.resumo)}</p>
+      ${est.body.riscos && est.body.riscos.length ? `<b>Riscos</b><ul>${li(est.body.riscos)}</ul>` : ""}
+      ${(est.body.noticias || []).length ? `<details><summary>Notícias do país (${est.body.noticias.length})</summary><ul>${est.body.noticias.map(n => `<li>${esc(n.titulo)} <span class="muted">${esc(n.fonte)}</span></li>`).join("")}</ul></details>` : ""}` : ""}
+    ${leg ? `<h4>Jurídico</h4><p class="muted">${esc(leg.body.aviso)}</p><table class="t"><tbody>${leg.body.itens.map(x => `<tr><td><b>${esc(x.tema)}</b></td><td>${esc(x.regra)}</td><td>${esc(x.acao)}</td></tr>`).join("")}</tbody></table>` : ""}
+    ${ads ? `<h4>Anúncios (rascunho · ${esc(ads.body.fonte)})</h4><div class="card"><b>Google</b><ul>${li(ads.body.google.titulos)}</ul><div class="muted">${ads.body.google.descricoes.map(esc).join(" · ")}</div>
+      <b>Meta</b><div>${esc(ads.body.meta.titulo)} — ${esc(ads.body.meta.texto)}</div><div class="muted">${esc(ads.body.verba)}</div></div>` : ""}
+    ${pl ? `<h4>Plataformas de venda</h4><ul>${pl.body.plataformas.map(x => `<li>${esc(x.nome)}</li>`).join("")}</ul><p class="muted">${esc(pl.body.aviso)}</p>` : ""}
+    ${fin ? `<h4>Financeiro</h4><dl class="kv"><dt>Moeda</dt><dd>${esc(fin.body.moeda)}</dd><dt>Preço local</dt><dd>${esc(fin.body.preco_local)}</dd>
+      <dt>Imposto</dt><dd>${esc(fin.body.imposto)}</dd><dt>Pagamentos comuns</dt><dd>${esc(fin.body.pagamentos_comuns)}</dd></dl><p class="muted">${esc(fin.body.aviso)}</p>` : ""}` });
+  $("#pBody").querySelectorAll("[data-task]").forEach(el => el.onclick = () => openTask(el.dataset.task));
+  const r = $("#mkRun"); if (r) r.onclick = () => act(() => api(`/api/agents/mkt_${id}/run`, { method: "POST" }), "CEO do mercado executou");
+  const ap = $("#mkAppr"); if (ap) ap.onclick = () => { closePanel(); S.tab = "aprovacoes"; setView("tabelas"); };
+}
 function fidelidadeHtml(pid) {
   const p = (S.world.partners || []).find(x => x.id === pid); const f = p && p.fidelidade; if (!f) return "";
   const pct = f.proximo_nivel_em == null ? 100 : Math.round(100 * f.servicos / (f.servicos + f.proximo_nivel_em));
@@ -832,7 +909,10 @@ async function openCountry(name) {
     ${bases.length ? `<h4>Bases / filiais (${bases.length})</h4>${bases.map(b => `<div class="card click" data-b="${b.id}" style="cursor:pointer">Base · ${esc(b.name)} <span class="muted">${esc(b.city || "")}/${esc(b.state || "")}</span></div>`).join("")}` : ""}
     ${whs.length ? `<h4>Armazéns</h4>${whs.map(w => `<div>${esc(w.name)} · ${esc(w.city || "")}</div>`).join("")}` : ""}`;
   const render = sts => {
-    openPanel({ title: esc(c.name_pt || name), sub: badge("mapa real · Natural Earth"), html: head + `<h4>Estados / províncias</h4>${sts}`, reload: null });
+    const keep = document.querySelector("#expBox");   // 2º desenho (quando os estados chegam) mantém o formulário já aberto/preenchido
+    const reuse = keep && keep.dataset.country === name && keep.childElementCount && !$("#panel").classList.contains("hidden");
+    openPanel({ title: esc(c.name_pt || name), sub: badge("mapa real · Natural Earth"), html: head + `<div id="expBox"></div><h4>Estados / províncias</h4>${sts}`, reload: null });
+    if (reuse) $("#expBox").replaceWith(keep); else if (can("mercados.read")) expandBox(name);
     $("#pBody").querySelectorAll("[data-p]").forEach(x => x.onclick = () => select("partner", x.dataset.p));
     $("#pBody").querySelectorAll("[data-b]").forEach(x => x.onclick = () => select("base", x.dataset.b, { data: S.world.service_bases.find(b => b.id === x.dataset.b) }));
     $("#pBody").querySelectorAll("[data-st]").forEach(x => x.onclick = () => { const s = S.w.states.states.find(z => z.name === x.dataset.st); select("state", s.name, { data: s, country: name }); });
@@ -993,6 +1073,7 @@ function setupSearch() {
     for (const st of (S.w && S.w.states ? S.w.states.states : [])) if (st.name.toLowerCase().includes(q)) items.push(["state", st.name, `Estado · ${st.name}`, st, S.w.states.country]);
     for (const p of S.world.partners) { if (p.name.toLowerCase().includes(q)) items.push(["partner", p.id, `Parceiro · ${p.name} · ${statusText(p.status.level)}`]);
       for (const u of p.units) if ((u.name + " " + (u.city || "") + " " + (u.state || "")).toLowerCase().includes(q)) items.push(["unit", u.id, `Unidade · ${u.name} (${u.city}/${u.state})`, { ...u, partner: p.name }]); }
+    for (const mk of S.world.markets || []) if ((mk.country + " " + (mk.marca || "")).toLowerCase().includes(q)) items.push(["market", mk.id, `Mercado · ${mk.country} · ${mk.marca || ""}`]);
     for (const b of S.world.service_bases || []) { if ((b.name + " " + (b.city || "")).toLowerCase().includes(q)) items.push(["base", b.id, `Base · ${b.name} (${b.city || ""})`, b]);
       for (const f of b.freelancers || []) if (f.name.toLowerCase().includes(q)) items.push(["freelancer", f.id, `Freelancer · ${f.name}`, { ...f, base: b.name }]); }
     for (const a of S.world.agents) if ((a.name + a.role).toLowerCase().includes(q)) items.push(["agent", a.id, `Agente · ${a.name}`]);

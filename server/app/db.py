@@ -344,6 +344,17 @@ CREATE TABLE IF NOT EXISTS messages (
   occurred_at TEXT, created_at TEXT NOT NULL, error TEXT
 );
 CREATE TABLE IF NOT EXISTS research_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS markets (
+  id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE, iso2 TEXT, country TEXT NOT NULL, lang TEXT NOT NULL, currency TEXT NOT NULL, tz TEXT,
+  status TEXT NOT NULL CHECK (status IN ('planejando','em_execucao','ativo','pausado','encerrado')),
+  presence TEXT NOT NULL DEFAULT 'remota' CHECK (presence IN ('remota','fisica')), address TEXT, lat REAL, lng REAL,
+  config_json TEXT NOT NULL, info_json TEXT, site_json TEXT, site_published INTEGER NOT NULL DEFAULT 0, published_at TEXT,
+  created_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, is_demo INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS market_items (id TEXT PRIMARY KEY, market_id TEXT NOT NULL REFERENCES markets(id), kind TEXT NOT NULL, title TEXT NOT NULL,
+  body_json TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS monitor_findings (id TEXT PRIMARY KEY, code TEXT NOT NULL, severity TEXT NOT NULL, title TEXT NOT NULL, detail TEXT,
+  first_at TEXT NOT NULL, last_at TEXT NOT NULL, resolved_at TEXT, proposal TEXT);
 CREATE TABLE IF NOT EXISTS loyalty_points (id TEXT PRIMARY KEY, partner_id TEXT NOT NULL, task_id TEXT NOT NULL UNIQUE, points INTEGER NOT NULL, reason TEXT, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS client_errors (

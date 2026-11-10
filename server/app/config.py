@@ -28,6 +28,9 @@ class Settings:
     decision_model: str = "claude-haiku-5-5"
     brain_monthly_cap_usd: float = 2.0
     brain_daily_cap_usd: float = 0.20
+    monitor_api_key: str = ""
+    monitor_monthly_cap_usd: float = 5.0
+    monitor_daily_cap_usd: float = 0.50
     routine_fallback_to_claude: bool = False
     research_enabled: bool = True
     whatsapp_token: str = ""
@@ -128,6 +131,9 @@ def load_settings(**overrides) -> Settings:
         decision_model=os.environ.get("BRAIN_DECISION_MODEL", "claude-haiku-5-5"),
         brain_monthly_cap_usd=float(os.environ.get("BRAIN_MONTHLY_CAP_USD", "2")),
         brain_daily_cap_usd=float(os.environ.get("BRAIN_DAILY_CAP_USD", "0.20")),
+        monitor_api_key=os.environ.get("MONITOR_ANTHROPIC_API_KEY", ""),
+        monitor_monthly_cap_usd=float(os.environ.get("MONITOR_MONTHLY_CAP_USD", "5")),
+        monitor_daily_cap_usd=float(os.environ.get("MONITOR_DAILY_CAP_USD", "0.50")),
         routine_fallback_to_claude=os.environ.get("BRAIN_ROUTINE_FALLBACK_CLAUDE", "0") == "1",
         research_enabled=os.environ.get("RESEARCH", "1") == "1",
         whatsapp_token=os.environ.get("WHATSAPP_TOKEN", ""),

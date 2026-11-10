@@ -28,6 +28,13 @@ def _fetch(url):
     return r.text
 
 
+def news_locale(query: str, lang: str, country: str, limit: int = 8):
+    """Notícias no idioma e país de um mercado (ex.: de-DE / DE)."""
+    country = (country or "US").upper()
+    LOCALES.setdefault(f"X:{lang}:{country}", (lang, country, f"{country}:{lang.split('-')[0]}"))
+    return news(query, f"X:{lang}:{country}", limit)
+
+
 def news(query: str, region: str = "BR", limit: int = 8):
     """Retorna {items:[{title,source,link,published}], error, cached, fetched_at}."""
     query = " ".join((query or "").split())[:120]
