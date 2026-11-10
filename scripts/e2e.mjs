@@ -69,6 +69,11 @@ await A.page.click("#pTabs button:has-text('Financeiro')"); await A.page.waitFor
 await A.page.screenshot({ path: `${OUT}/05_predio_financeiro.png` });
 
 // 5. Desconexão e recuperação: o servidor cai, novos eventos acontecem, o painel reconecta e recebe o que perdeu.
+const diag = await A.page.evaluate(() => { const el = document.querySelector("#panel"), r = el.getBoundingClientRect(), m = document.querySelector("main");
+  return { rect: [r.x, r.y, r.width, r.height].map(Math.round), tf: el.style.transform, cls: el.className, win: [innerWidth, innerHeight, scrollX, scrollY],
+    main: [m.scrollLeft, m.scrollTop, m.clientWidth, m.clientHeight], doc: [document.documentElement.scrollWidth, document.documentElement.scrollHeight],
+    lbls: document.querySelectorAll(".lbl").length }; });
+log("painel antes de fechar:", JSON.stringify(diag), "erros até aqui:", JSON.stringify(errors.slice(0, 5)));
 await A.page.click("#closePanel");
 await A.page.route("**/api/stream**", r => r.abort());
 execSync(process.env.E2E_RESTART || "true", { stdio: "ignore" });
