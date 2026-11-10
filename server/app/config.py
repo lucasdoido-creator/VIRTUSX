@@ -55,7 +55,7 @@ def _load_local_env():
     p = ROOT / "config.local.env"
     if not p.exists():
         return
-    for line in p.read_text(encoding="utf-8-sig")  # tolera BOM do Bloco de Notas.splitlines():
+    for line in p.read_text(encoding="utf-8-sig").splitlines():  # utf-8-sig tolera BOM do Bloco de Notas
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
