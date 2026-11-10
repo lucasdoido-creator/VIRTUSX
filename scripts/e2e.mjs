@@ -106,7 +106,7 @@ const vigErr = vig.client_errors.filter(e => !e.resolved);
 if (vigErr.length) { console.log("VIGIA REGISTROU ERRO DE TELA:\n" + JSON.stringify(vigErr.slice(0, 5), null, 1)); process.exit(1); }
 log("vigia: nenhum erro de tela registrado; saúde =", vig.level);
 await browser.close();
-const EXPECTED = [/status of 401/, /status of 403/, /ERR_INCOMPLETE_CHUNKED_ENCODING/, /ERR_FAILED/]; // login inicial, teste de isolamento, queda proposital do servidor
+const EXPECTED = [/status of 401/, /status of 403/, /ERR_INCOMPLETE_CHUNKED_ENCODING/, /ERR_FAILED/, /ERR_EMPTY_RESPONSE/, /ERR_CONNECTION_REFUSED/]; // login inicial, teste de isolamento, queda proposital do servidor
 const real = errors.filter(e => !EXPECTED.some(r => r.test(e)));
 if (real.length) { errors.length = 0; errors.push(...real); console.log("ERROS DE CONSOLE:\n" + errors.join("\n")); process.exit(1); }
 console.log("E2E OK");
