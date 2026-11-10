@@ -167,14 +167,19 @@ async function refresh(auto = false) {  // auto = disparado por evento: não apa
   const busy = sel => auto && editing(sel);
   try {
     if (S.me.role === "tecnico") {  // técnico não tem visão do mundo: só recarrega a tarefa e a lista
-      if (S.panel && S.panel.reload && !busy("#pBody")) S.panel.reload();
+      if (S.panel && S.panel.reload && !busy("#pBody")) await reloadPanel();
       return busy("#tBody") ? null : renderTables(true, auto);
     }
     S.world = await api("/api/world"); updateHeader();
     if (S.w) S.w.build(S.world);
-    if (S.panel && S.panel.reload && !busy("#pBody")) S.panel.reload();
+    if (S.panel && S.panel.reload && !busy("#pBody")) await reloadPanel();
     if (S.view === "tabelas" && !busy("#tBody")) renderTables(true, auto);
   } catch (e) { if (e.status === 401) location.reload(); }
+}
+// Recarrega o painel aberto e ESPERA terminar: o próximo passo (ex.: abrir a tarefa recém-criada)
+// nunca é coberto por uma recarga antiga que chegou atrasada.
+async function reloadPanel() {
+  try { await S.panel.reload(); } catch (e) { if (e.status === 401) throw e; }
 }
 // Nunca redesenhar por cima do que a pessoa está digitando (cadastro, resposta de WhatsApp…):
 // a área espera e é atualizada no próximo evento depois que o formulário for enviado ou limpo.
