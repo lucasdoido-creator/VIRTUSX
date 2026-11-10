@@ -40,7 +40,7 @@ log("freelancer autorizado");
 
 // 3. tarefa com checklist de TI atribuída à freelancer, criada no prédio do cliente
 await A.click('#viewSeg button[data-view="3d"]'); await A.waitForTimeout(1500);
-await A.click(".lbl:has-text('Clínica Vida')"); await A.waitForSelector("#pTitle:has-text('Clínica Vida')");
+await A.fill("#q", "Clínica Vida"); await A.click("#qres button:has-text('Parceiro · Clínica Vida')"); await A.waitForSelector("#pTitle:has-text('Clínica Vida')");
 await A.click("#pTabs button:has-text('Operação')"); await A.click("#pBody summary:has-text('Nova tarefa')");
 await A.selectOption("#taskForm [name=template]", "chamado_ti");
 await A.selectOption("#taskForm [name=unit_id]", { label: "Matriz" });

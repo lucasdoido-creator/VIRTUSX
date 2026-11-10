@@ -36,16 +36,17 @@ const VS = `attribute vec3 aPos;attribute vec3 aNor;uniform mat4 uVP;uniform vec
 varying vec3 vNor;varying vec3 vLocal;varying vec3 vWorld;
 void main(){vec3 p=aPos*uScale+uOff;vLocal=aPos*uScale;vNor=aNor;vWorld=p;gl_Position=uVP*vec4(p,1.);}`;
 const FS = `precision mediump float;uniform vec3 uColor;uniform float uEmissive;uniform float uWin;uniform float uGrid;uniform float uAlpha;
-uniform vec3 uFog;uniform vec3 uEye;uniform vec3 uWinColor;uniform float uEdge;varying vec3 vNor;varying vec3 vLocal;varying vec3 vWorld;
+uniform vec3 uFog;uniform vec3 uEye;uniform vec3 uWinColor;uniform float uEdge;uniform sampler2D uTex;uniform float uUseTex;uniform float uK;uniform float uFogK;varying vec3 vNor;varying vec3 vLocal;varying vec3 vWorld;
 void main(){vec3 n=normalize(vNor);vec3 L=normalize(vec3(.45,.9,.3));float diff=max(dot(n,L),0.);float hemi=.5+.5*n.y;
 vec3 col=uColor*(.30+.55*diff+.22*hemi);
+if(uUseTex>.5&&n.y>.5){vec2 uv=vec2((vWorld.x/uK+180.)/360.,(vWorld.z/uK+90.)/180.);col=(uv.x<0.||uv.x>1.||uv.y<0.||uv.y>1.)?uFog*1.2:texture2D(uTex,uv).rgb;}
 if(uWin>.5&&abs(n.y)<.5){vec2 uv=vec2(abs(n.x)>.5?vLocal.z:vLocal.x,vLocal.y);vec2 cell=fract(uv/vec2(1.1,1.3));
 float w=step(.22,cell.x)*step(cell.x,.78)*step(.28,cell.y)*step(cell.y,.78)*step(.9,vLocal.y);
 vec2 id=floor(uv/vec2(1.1,1.3));float r=fract(sin(dot(id,vec2(12.9898,78.233)))*43758.5453);
 col=mix(col,uWinColor*(.35+.65*r),w*.8);}
 if(uGrid>.5){vec2 g=abs(fract(vWorld.xz/10.)-.5);float line=1.-smoothstep(0.,.025,min(g.x,g.y));vec2 G=abs(fract(vWorld.xz/60.)-.5);float big=1.-smoothstep(0.,.006,min(G.x,G.y));col+=vec3(.03,.10,.18)*line+vec3(.20,.10,.45)*big;}
 if(uEdge>.5&&abs(n.y)<.5){float e=1.-smoothstep(0.,.35,min(abs(vLocal.y-floor(vLocal.y/6.)*6.),6.));col+=uWinColor*.25*e;}
-col+=uColor*uEmissive;float d=length(vWorld-uEye);float fog=1.-exp(-pow(d*.0042,2.));col=mix(col,uFog,clamp(fog,0.,1.));
+col+=uColor*uEmissive;float d=length(vWorld-uEye);float fog=1.-exp(-pow(d*uFogK,2.));col=mix(col,uFog,clamp(fog,0.,1.));
 gl_FragColor=vec4(col,uAlpha);}`;
 const LVS = `attribute vec3 aPos;uniform mat4 uVP;void main(){gl_Position=uVP*vec4(aPos,1.);}`;
 const LFS = `precision mediump float;uniform vec4 uColor;void main(){gl_FragColor=uColor;}`;
@@ -66,14 +67,14 @@ export class Renderer {
     this.canvas = canvas; this.lite = !!opts.lite;
     const gl = canvas.getContext("webgl", { antialias: !this.lite, alpha: false, preserveDrawingBuffer: !!opts.preserve });
     if (!gl) throw new Error("WebGL indisponível");
-    this.gl = gl; this.meshes = []; this.lines = []; this.pulses = []; this.dirty = true;
+    this.gl = gl; this.meshes = []; this.lines = []; this.lineSets = []; this.pulses = []; this.dirty = true; this.K = opts.K || 40; this.maxDist = opts.maxDist || 600;
     this.bg = [0.020, 0.028, 0.070];
     this.cam = { tx: 0, ty: 0, tz: 10, dist: 230, yaw: 0.5, pitch: 0.78 };
     this.p = this._prog(VS, FS); this.lp = this._prog(LVS, LFS);
     const c = cube(); this.vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.vb); gl.bufferData(gl.ARRAY_BUFFER, c.pos, gl.STATIC_DRAW);
     this.nb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.nb); gl.bufferData(gl.ARRAY_BUFFER, c.nor, gl.STATIC_DRAW);
     this.lb = gl.createBuffer();
-    this.U = {}; for (const u of ["uVP", "uOff", "uScale", "uColor", "uEmissive", "uWin", "uGrid", "uAlpha", "uFog", "uEye", "uWinColor", "uEdge"]) this.U[u] = gl.getUniformLocation(this.p, u);
+    this.U = {}; for (const u of ["uVP", "uOff", "uScale", "uColor", "uEmissive", "uWin", "uGrid", "uAlpha", "uFog", "uEye", "uWinColor", "uEdge", "uTex", "uUseTex", "uK", "uFogK"]) this.U[u] = gl.getUniformLocation(this.p, u);
     this.LU = { uVP: gl.getUniformLocation(this.lp, "uVP"), uColor: gl.getUniformLocation(this.lp, "uColor") };
     this._controls(); this._resize();
     new ResizeObserver(() => this._resize()).observe(canvas);
@@ -92,9 +93,33 @@ export class Renderer {
   eye() { const c = this.cam, cp = Math.cos(c.pitch);
     return [c.tx + c.dist * cp * Math.sin(c.yaw), c.ty + c.dist * Math.sin(c.pitch), c.tz + c.dist * cp * Math.cos(c.yaw)]; }
   vp() { const a = this.canvas.width / this.canvas.height;
-    return M.mul(M.persp(0.75, a, 1, 2000), M.lookAt(this.eye(), [this.cam.tx, this.cam.ty, this.cam.tz], [0, 1, 0])); }
+    const far = Math.max(2000, this.cam.dist * 8), near = Math.max(0.5, this.cam.dist / 400);
+    return M.mul(M.persp(0.75, a, near, far), M.lookAt(this.eye(), [this.cam.tx, this.cam.ty, this.cam.tz], [0, 1, 0])); }
   add(m) { this.meshes.push(Object.assign({ pos: [0, 0, 0], scale: [1, 1, 1], color: [.5, .5, .5], emissive: 0, win: 0, grid: 0, alpha: 1, visible: true }, m)); this.dirty = true; return this.meshes[this.meshes.length - 1]; }
   clear() { this.meshes = []; this.lines = []; this.pulses = []; this.dirty = true; }
+  // Linhas em lote: milhares de segmentos (fronteiras) num único desenho.
+  addLineSet(key, floats, color) {
+    const gl = this.gl; this.removeLineSet(key);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, floats, gl.STATIC_DRAW);
+    this.lineSets.push({ key, buf, count: floats.length / 3, color, visible: true }); this.dirty = true;
+  }
+  removeLineSet(key) { const i = this.lineSets.findIndex(s => s.key === key); if (i >= 0) { this.gl.deleteBuffer(this.lineSets[i].buf); this.lineSets.splice(i, 1); this.dirty = true; } }
+  setTexture(canvas) {
+    const gl = this.gl; if (!this.tex) this.tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.tex); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+    gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); this.dirty = true;
+  }
+  // Ponto do chão (y=0) sob o cursor → coordenadas do mundo.
+  groundPoint(px, py) {
+    const inv = M.inv(this.vp()); if (!inv) return null;
+    const nx = px / this.canvas.clientWidth * 2 - 1, ny = 1 - py / this.canvas.clientHeight * 2;
+    const a = M.xf(inv, [nx, ny, -1, 1]), b = M.xf(inv, [nx, ny, 1, 1]);
+    const o = [a[0] / a[3], a[1] / a[3], a[2] / a[3]], e = [b[0] / b[3], b[1] / b[3], b[2] / b[3]];
+    const dy = e[1] - o[1]; if (Math.abs(dy) < 1e-9) return null; const t = -o[1] / dy; if (t < 0) return null;
+    return [o[0] + (e[0] - o[0]) * t, 0, o[2] + (e[2] - o[2]) * t];
+  }
   pulse(from, to, color, dur = 1.4) { if (this.reduced) return; this.pulses.push({ from, to, color, t0: performance.now(), dur }); }
   project(p) {
     const v = M.xf(this._vp || this.vp(), [p[0], p[1], p[2], 1]); if (v[3] <= 0) return null;
@@ -129,17 +154,18 @@ export class Renderer {
       const prev = ptrs.get(e.pointerId); const dx = e.clientX - prev[0], dy = e.clientY - prev[1]; ptrs.set(e.pointerId, [e.clientX, e.clientY]);
       moved += Math.abs(dx) + Math.abs(dy);
       if (ptrs.size === 2) { const [p1, p2] = [...ptrs.values()]; const dd = Math.hypot(p1[0] - p2[0], p1[1] - p2[1]);
-        if (pinch) this.cam.dist = Math.min(600, Math.max(15, this.cam.dist * pinch / dd)); pinch = dd; }
+        if (pinch) this.cam.dist = Math.min(this.maxDist, Math.max(8, this.cam.dist * pinch / dd)); pinch = dd; }
       else if (down && (down.b === 2 || e.shiftKey)) { const s = this.cam.dist / 600, cy = Math.cos(this.cam.yaw), sy = Math.sin(this.cam.yaw);
         this.cam.tx -= (dx * cy + dy * sy) * s; this.cam.tz -= (-dx * sy + dy * cy) * s; }
       else { this.cam.yaw -= dx * 0.006; this.cam.pitch = Math.min(1.45, Math.max(0.18, this.cam.pitch + dy * 0.005)); }
       this.dirty = true; this.onCamera && this.onCamera();
     });
     const up = e => { ptrs.delete(e.pointerId); if (ptrs.size < 2) pinch = null;
-      if (down && moved < 6 && e.type === "pointerup") { const r = cv.getBoundingClientRect(); this.onClick && this.onClick(this.pick(e.clientX - r.left, e.clientY - r.top)); }
+      if (down && moved < 6 && e.type === "pointerup") { const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+        this.onClick && this.onClick(this.pick(x, y), this.groundPoint(x, y)); }
       if (!ptrs.size) down = null; };
     cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
-    cv.addEventListener("wheel", e => { e.preventDefault(); this.cam.dist = Math.min(600, Math.max(15, this.cam.dist * (e.deltaY > 0 ? 1.1 : 0.9))); this.dirty = true; this.onCamera && this.onCamera(); }, { passive: false });
+    cv.addEventListener("wheel", e => { e.preventDefault(); this.cam.dist = Math.min(this.maxDist, Math.max(8, this.cam.dist * (e.deltaY > 0 ? 1.12 : 0.89))); this.dirty = true; this.onCamera && this.onCamera(); }, { passive: false });
   }
   _frame(t) {
     if (!this.dirty && !this.pulses.length && !this.animating) return;
@@ -150,15 +176,25 @@ export class Renderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vb); let loc = gl.getAttribLocation(this.p, "aPos"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.nb); loc = gl.getAttribLocation(this.p, "aNor"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
     gl.uniformMatrix4fv(U.uVP, false, vp); gl.uniform3fv(U.uFog, this.bg); gl.uniform3fv(U.uEye, eye);
+    gl.uniform1f(U.uK, this.K); gl.uniform1f(U.uFogK, 0.0042 * 230 / Math.max(this.cam.dist, 60)); gl.uniform1i(U.uTex, 0);
+    if (this.tex) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.tex); }
     const draw = m => { gl.uniform3fv(U.uOff, m.pos); gl.uniform3fv(U.uScale, m.scale); gl.uniform3fv(U.uColor, m.color);
-      gl.uniform1f(U.uEmissive, m.emissive); gl.uniform1f(U.uWin, this.lite ? 0 : m.win); gl.uniform3fv(U.uWinColor, m.winColor || [0.45, 0.85, 1.0]); gl.uniform1f(U.uEdge, this.lite ? 0 : (m.edge || 0)); gl.uniform1f(U.uGrid, m.grid); gl.uniform1f(U.uAlpha, m.alpha); gl.drawArrays(gl.TRIANGLES, 0, 36); };
+      gl.uniform1f(U.uEmissive, m.emissive); gl.uniform1f(U.uWin, this.lite ? 0 : m.win); gl.uniform3fv(U.uWinColor, m.winColor || [0.45, 0.85, 1.0]); gl.uniform1f(U.uEdge, this.lite ? 0 : (m.edge || 0)); gl.uniform1f(U.uUseTex, m.tex && this.tex ? 1 : 0); gl.uniform1f(U.uGrid, m.grid); gl.uniform1f(U.uAlpha, m.alpha); gl.drawArrays(gl.TRIANGLES, 0, 36); };
     const opaque = this.meshes.filter(m => m.visible && m.alpha >= 1), trans = this.meshes.filter(m => m.visible && m.alpha < 1);
     opaque.forEach(draw);
     const now = performance.now();
     this.pulses = this.pulses.filter(p => (now - p.t0) / 1000 < p.dur);
-    for (const p of this.pulses) { const k = (now - p.t0) / 1000 / p.dur, h = Math.sin(k * Math.PI) * 10;
-      draw({ pos: [p.from[0] + (p.to[0] - p.from[0]) * k, p.from[1] + (p.to[1] - p.from[1]) * k + h, p.from[2] + (p.to[2] - p.from[2]) * k], scale: [1.6, 1.6, 1.6], color: p.color, emissive: 1.4, win: 0, grid: 0, alpha: 1 }); }
+    const ps = Math.max(1.6, this.cam.dist / 220);  // pulso continua visível com a câmera longe
+    for (const p of this.pulses) { const k = (now - p.t0) / 1000 / p.dur, len = Math.hypot(p.to[0] - p.from[0], p.to[2] - p.from[2]), h = Math.sin(k * Math.PI) * Math.max(10, len * 0.15);
+      draw({ pos: [p.from[0] + (p.to[0] - p.from[0]) * k, p.from[1] + (p.to[1] - p.from[1]) * k + h, p.from[2] + (p.to[2] - p.from[2]) * k], scale: [ps, ps, ps], color: p.color, emissive: 1.4, win: 0, grid: 0, alpha: 1 }); }
     if (trans.length) { gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false); trans.forEach(draw); gl.depthMask(true); gl.disable(gl.BLEND); }
+    if (this.lineSets.length) {
+      gl.useProgram(this.lp); gl.uniformMatrix4fv(this.LU.uVP, false, vp); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+      const l = gl.getAttribLocation(this.lp, "aPos"); gl.enableVertexAttribArray(l);
+      for (const s of this.lineSets) { if (!s.visible) continue; gl.bindBuffer(gl.ARRAY_BUFFER, s.buf); gl.vertexAttribPointer(l, 3, gl.FLOAT, false, 0, 0);
+        gl.uniform4fv(this.LU.uColor, s.color); gl.drawArrays(gl.LINES, 0, s.count); }
+      gl.disable(gl.BLEND);
+    }
     if (this.lines.length) {
       gl.useProgram(this.lp); gl.uniformMatrix4fv(this.LU.uVP, false, vp); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lb); const l = gl.getAttribLocation(this.lp, "aPos"); gl.enableVertexAttribArray(l);

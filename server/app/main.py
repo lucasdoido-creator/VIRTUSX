@@ -22,7 +22,7 @@ from .config import ROOT, load_settings
 from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, hash_token, new_token, verify_password
 from .db import DB, iso, loads, now
 from datetime import timedelta
-from . import agents, brain, ceo, closings, commerce, ops, policies, registry, seed, tasks
+from . import agents, brain, ceo, channels, closings, commands, commerce, ops, policies, registry, seed, tasks
 
 WEB = ROOT / "web"
 # No Windows o registro pode mapear .js para text/plain, o que bloqueia módulos JS no navegador.
@@ -155,6 +155,18 @@ async def order_public(req):
 async def webhook(req):
     raw = await req.body()
     return ok(await T(commerce.receive_webhook, req.path_params["provider"], raw, dict(req.headers)))
+
+
+@endpoint
+async def wa_verify(req):
+    from starlette.responses import PlainTextResponse
+    return PlainTextResponse(await T(channels.webhook_verify, dict(req.query_params)))
+
+
+@endpoint
+async def wa_receive(req):
+    raw = await req.body()
+    return ok(await T(channels.webhook_receive, raw, dict(req.headers)))
 
 
 # ------------------------------------------------------------------ privado
@@ -343,6 +355,35 @@ def _templates(req, p, b): return {k: v for k, v in tasks.TEMPLATES.items()}
 def _checklist(req, p, b): return {"checklist": tasks.set_checklist_item(p, req.path_params["id"], b.get("index"), b.get("done"))}
 
 
+def _geo_countries(req, p, b):
+    p.require("world.read")
+    from . import geo
+    return geo.countries()
+
+
+def _geo_states(req, p, b):
+    p.require("world.read")
+    from . import geo
+    return geo.states(req.query_params.get("country") or "Brazil")
+
+
+def _channels(req, p, b): return channels.channels_overview(p)
+def _channel_new(req, p, b): return {"id": channels.create_channel(p, b.get("name"), b.get("base_id"))}
+def _contact_new(req, p, b): return {"id": channels.save_contact(p, b.get("partner_id"), b.get("name") or "", b.get("phone"), b.get("role"))}
+def _convs(req, p, b): return channels.list_conversations(p, qp(req, "partner_id"), qp(req, "status"))
+def _conv(req, p, b): return channels.get_conversation(p, req.path_params["id"])
+def _conv_send(req, p, b): return channels.send(p, req.path_params["id"], b.get("text"))
+def _conv_status(req, p, b):
+    channels.set_status(p, req.path_params["id"], b.get("status"))
+    return {"status": b.get("status")}
+def _conv_suggest(req, p, b): return channels.suggest_reply(p, req.path_params["id"])
+def _conv_ticket(req, p, b): return channels.open_ticket(p, req.path_params["id"], b.get("unit_id") or None)
+def _conv_link(req, p, b): return {"contact_id": channels.link_client(p, req.path_params["id"], b.get("partner_id"), b.get("name"))}
+def _wa_sim(req, p, b): return channels.simulate_inbound(p, b.get("phone") or "", b.get("text") or "", b.get("name") or "Cliente (simulação)")
+def _cmd_parse(req, p, b): return commands.parse(p, b.get("text"))
+def _cmd_exec(req, p, b): return commands.execute(p, b.get("action"), b.get("args"))
+
+
 def _ceo(req, p, b): return ceo.list_ventures(p, req.path_params["id"])
 def _idea(req, p, b): return {"id": ceo.submit_idea(p, req.path_params["id"], b.get("idea"), b.get("keywords"))}
 
@@ -424,7 +465,8 @@ class SecurityHeaders(BaseHTTPMiddleware):
 # ------------------------------------------------------------------ agendador
 def tick():
     from .tasks import process_recurrences
-    for fn in (ops.heartbeat_internal_modules, process_recurrences, commerce.retry_due_webhooks, commerce.expire_reservations,
+    from . import geo
+    for fn in (ops.heartbeat_internal_modules, geo.geocode_missing, process_recurrences, commerce.retry_due_webhooks, commerce.expire_reservations,
                commerce.release_commissions, agents.run_due_agents):
         try:
             fn()
@@ -459,6 +501,7 @@ def create_app(**overrides):
     with R.db.tx() as c:
         agents.ensure_agents(c)  # agentes novos entram em bancos já existentes
         ceo.ensure_ceos(c)       # um CEO de IA por parceiro
+        channels.ensure_whatsapp_channel(c)
 
     stop = threading.Event()
 
@@ -479,6 +522,7 @@ def create_app(**overrides):
         Route("/api/public/stores/{slug}", store_get), Route("/api/public/stores/{slug}/checkout", store_checkout, methods=["POST"]),
         Route("/api/public/orders/{code}", order_public), Route("/api/public/orders/{code}/pay", order_pay, methods=["POST"]),
         Route("/api/webhooks/payments/{provider}", webhook, methods=["POST"]),
+        Route("/api/webhooks/whatsapp", wa_verify, methods=["GET"]), Route("/api/webhooks/whatsapp", wa_receive, methods=["POST"]),
         Route("/api/world", P(_world)), Route("/api/overview", P(_overview)), Route("/api/partners/{id}/building", P(_building)),
         Route("/api/partners/{id}/storefronts", P(_sf_create), methods=["POST"]), Route("/api/storefronts/{id}", P(_sf_patch), methods=["PATCH"]),
         Route("/api/orders", P(_orders)), Route("/api/orders/{id}", P(_order)),
@@ -493,6 +537,14 @@ def create_app(**overrides):
         Route("/api/closings/{id}/reopen", P(_closing_reopen), methods=["POST"]),
         Route("/api/closings/{id}/settle", P(_closing_settle), methods=["POST"]),
         Route("/api/commissions/adjustments", P(_adjust), methods=["POST"]),
+        Route("/api/channels", P(_channels)), Route("/api/channels", P(_channel_new), methods=["POST"]),
+        Route("/api/contacts", P(_contact_new), methods=["POST"]),
+        Route("/api/conversations", P(_convs)), Route("/api/conversations/{id}", P(_conv)),
+        Route("/api/conversations/{id}/send", P(_conv_send), methods=["POST"]), Route("/api/conversations/{id}/status", P(_conv_status), methods=["POST"]),
+        Route("/api/conversations/{id}/suggest", P(_conv_suggest), methods=["POST"]), Route("/api/conversations/{id}/ticket", P(_conv_ticket), methods=["POST"]),
+        Route("/api/conversations/{id}/link", P(_conv_link), methods=["POST"]), Route("/api/demo/whatsapp-inbound", P(_wa_sim), methods=["POST"]),
+        Route("/api/commands/parse", P(_cmd_parse), methods=["POST"]), Route("/api/commands/execute", P(_cmd_exec), methods=["POST"]),
+        Route("/api/geo/countries", P(_geo_countries)), Route("/api/geo/states", P(_geo_states)),
         Route("/api/cadastros", P(_reg)),
         Route("/api/cadastros/bases", P(_reg_base), methods=["POST"]), Route("/api/cadastros/bases/{id}", P(_reg_base), methods=["PUT"]),
         Route("/api/cadastros/clientes", P(_reg_client), methods=["POST"]), Route("/api/cadastros/clientes/{id}", P(_reg_client), methods=["PUT"]),

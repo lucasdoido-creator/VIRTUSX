@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS partner_units (
   id TEXT PRIMARY KEY, partner_id TEXT NOT NULL REFERENCES partners(id), name TEXT NOT NULL,
   country TEXT NOT NULL, state TEXT, city TEXT, address TEXT,
   location_status TEXT NOT NULL CHECK (location_status IN ('confirmada','nao_confirmada')),
-  location_source TEXT, lat REAL, lng REAL, is_demo INTEGER NOT NULL DEFAULT 0, base_id TEXT, active INTEGER NOT NULL DEFAULT 1
+  location_source TEXT, lat REAL, lng REAL, is_demo INTEGER NOT NULL DEFAULT 0, base_id TEXT, active INTEGER NOT NULL DEFAULT 1, geo_source TEXT
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -114,7 +114,8 @@ CREATE TABLE IF NOT EXISTS partner_products (
 
 CREATE TABLE IF NOT EXISTS warehouses (
   id TEXT PRIMARY KEY, region_code TEXT NOT NULL REFERENCES regions(code), name TEXT NOT NULL,
-  state TEXT, city TEXT, location_status TEXT NOT NULL DEFAULT 'nao_confirmada', is_demo INTEGER NOT NULL DEFAULT 0
+  state TEXT, city TEXT, location_status TEXT NOT NULL DEFAULT 'nao_confirmada', is_demo INTEGER NOT NULL DEFAULT 0,
+  lat REAL, lng REAL, geo_source TEXT
 );
 
 CREATE TABLE IF NOT EXISTS inventory (
@@ -321,7 +322,26 @@ CREATE TABLE IF NOT EXISTS brain_usage (
 CREATE TABLE IF NOT EXISTS service_bases (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT, city TEXT, address TEXT,
   location_status TEXT NOT NULL DEFAULT 'nao_confirmada', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
-  is_demo INTEGER NOT NULL DEFAULT 0
+  is_demo INTEGER NOT NULL DEFAULT 0, lat REAL, lng REAL, geo_source TEXT
+);
+CREATE TABLE IF NOT EXISTS channels (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('whatsapp','interno')), name TEXT NOT NULL, status TEXT NOT NULL,
+  base_id TEXT, config_json TEXT, created_at TEXT NOT NULL, created_by TEXT
+);
+CREATE TABLE IF NOT EXISTS contacts (
+  id TEXT PRIMARY KEY, partner_id TEXT NOT NULL REFERENCES partners(id), name TEXT NOT NULL, phone TEXT NOT NULL, role TEXT,
+  active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, UNIQUE(phone)
+);
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY, channel_id TEXT NOT NULL REFERENCES channels(id), partner_id TEXT, contact_id TEXT, wa_id TEXT,
+  contact_name TEXT, status TEXT NOT NULL, unread INTEGER NOT NULL DEFAULT 0, assigned_to TEXT, last_inbound_at TEXT,
+  last_message_at TEXT, created_at TEXT NOT NULL, is_demo INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_conv_wa ON conversations(channel_id, wa_id) WHERE wa_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id), direction TEXT NOT NULL CHECK (direction IN ('in','out','nota')),
+  body TEXT NOT NULL, wa_message_id TEXT UNIQUE, status TEXT NOT NULL, author TEXT, is_simulated INTEGER NOT NULL DEFAULT 0,
+  occurred_at TEXT, created_at TEXT NOT NULL, error TEXT
 );
 CREATE TABLE IF NOT EXISTS research_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, payload TEXT NOT NULL);
 
@@ -407,7 +427,9 @@ class DB:
 # ------------------------------------------------------------------ migrações (bancos já existentes no seu computador)
 ADDED_COLUMNS = {
     "partners": ["segment TEXT", "contract_minor INTEGER", "notes TEXT"],
-    "partner_units": ["base_id TEXT", "active INTEGER NOT NULL DEFAULT 1"],
+    "partner_units": ["base_id TEXT", "active INTEGER NOT NULL DEFAULT 1", "geo_source TEXT"],
+    "warehouses": ["lat REAL", "lng REAL", "geo_source TEXT"],
+    "service_bases": ["lat REAL", "lng REAL", "geo_source TEXT"],
     "tasks": ["checklist_json TEXT", "template TEXT"],
     "users": ["base_id TEXT"],
 }

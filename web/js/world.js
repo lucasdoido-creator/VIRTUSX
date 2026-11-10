@@ -1,105 +1,193 @@
-// Cena da cidade operacional. Posições são ILUSTRATIVAS (layout), não geográficas.
+// Mundo operacional sobre o MAPA REAL (países e estados do Natural Earth, projeção equiretangular).
+// Posição = coordenada da cidade (aproximada) ou do endereço confirmado; o painel sempre diz qual é a fonte.
 import { to, motion } from "./anim.js";
 import { esc } from "./api.js";
 
-const REGION_POS = { US: [-95, 0, -45], PT: [95, 0, -45], BR: [-5, 0, 80] };
-const REGION_TINT = { US: [0.10, 0.14, 0.24], PT: [0.13, 0.12, 0.22], BR: [0.08, 0.17, 0.17] };
-const HQ = [0, 0, -10];
-const SECTORS = { catalogo: [-22, 0, -30], logistica: [22, 0, -30], atendimento: [-22, 0, 10], financeiro: [22, 0, 10] };
+export const K = 40;  // unidades do mundo por grau
+const ll = (lat, lng) => [lng * K, 0, -lat * K];
+const SECTOR_OFF = { catalogo: [-20, 0, -20], logistica: [20, 0, -20], atendimento: [-20, 0, 20], financeiro: [20, 0, 20] };
 const SECTOR_COLOR = { catalogo: [0.35, 0.30, 0.75], logistica: [0.10, 0.50, 0.55], atendimento: [0.55, 0.35, 0.20], financeiro: [0.20, 0.50, 0.30] };
 export const LEVEL_RGB = { verde: [0.20, 0.83, 0.60], amarelo: [0.98, 0.75, 0.14], vermelho: [0.97, 0.44, 0.44], cinza: [0.58, 0.64, 0.72] };
 export const AGENT_RGB = { disponivel: [0.37, 0.92, 0.83], executando: [0.38, 0.65, 1.0], aguardando_integracao: [0.98, 0.75, 0.14],
   aguardando_decisao: [0.65, 0.55, 0.98], falhou: [0.97, 0.44, 0.44], concluido: [0.20, 0.83, 0.60], desativado: [0.4, 0.45, 0.52] };
 export const AGENT_LABEL = { disponivel: "disponível", executando: "executando", aguardando_integracao: "aguardando integração",
   aguardando_decisao: "aguardando decisão", falhou: "falhou", concluido: "concluído", desativado: "desativado" };
-const AGENT_HOME = { coordenador: [0, 0, 6], estoque: SECTORS.logistica, financeiro: SECTORS.financeiro, catalogo: SECTORS.catalogo,
-  analise: [-8, 0, 6], atendimento: SECTORS.atendimento, parceiros: [8, 0, 6] };
+const AGENT_HOME = { coordenador: [0, 0, 26], estoque: SECTOR_OFF.logistica, financeiro: SECTOR_OFF.financeiro, catalogo: SECTOR_OFF.catalogo,
+  analise: [-8, 0, 26], atendimento: SECTOR_OFF.atendimento, parceiros: [8, 0, 26], pesquisa: [-14, 0, 30], conteudo: [14, 0, 30] };
 export const FLOORS = [["recepcao", "Recepção"], ["comercial", "Comercial"], ["operacao", "Operação"], ["financeiro", "Financeiro"],
-  ["pendencias", "Pendências"], ["aplicativos", "Aplicativos"], ["equipe", "Equipe e agentes"], ["diretoria", "Diretoria · CEO de IA"]];
+  ["pendencias", "Pendências"], ["aplicativos", "Aplicativos"], ["equipe", "Equipe e agentes"], ["atendimento", "Atendimento · WhatsApp"],
+  ["diretoria", "Diretoria · CEO de IA"]];
 
 const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const COUNTRY_PT = { Brazil: "Brasil", Portugal: "Portugal", "United States of America": "Estados Unidos" };
+
+function pip(lon, lat, ring) {  // ponto no polígono (anel achatado [lon,lat,...])
+  let inside = false;
+  for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
+    const xi = ring[i], yi = ring[i + 1], xj = ring[j], yj = ring[j + 1];
+    if ((yi > lat) !== (yj > lat) && lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+function hitArea(list, lon, lat) {
+  for (const c of list) { const b = c.bbox; if (lon < b[0] || lon > b[2] || lat < b[1] || lat > b[3]) continue;
+    if (c.rings.some(r => pip(lon, lat, r))) return c; }
+  return null;
+}
+function segments(list, y) {
+  let n = 0; for (const c of list) for (const r of c.rings) n += r.length / 2;
+  const out = new Float32Array(n * 6); let k = 0;
+  for (const c of list) for (const r of c.rings) for (let i = 0; i < r.length; i += 2) {
+    const j = (i + 2) % r.length; out[k++] = r[i] * K; out[k++] = y; out[k++] = -r[i + 1] * K; out[k++] = r[j] * K; out[k++] = y; out[k++] = -r[j + 1] * K;
+  }
+  return out.subarray(0, k);
+}
 
 export class World {
   constructor(renderer, labelsEl, handlers) {
-    this.r = renderer; this.labelsEl = labelsEl; this.h = handlers; this.r.reduced = motion.reduced;
+    this.r = renderer; this.labelsEl = labelsEl; this.h = handlers; this.r.reduced = motion.reduced; this.r.K = K; this.r.maxDist = 14000;
     this.objs = new Map(); this.labels = []; this.agentPos = new Map(); this.filters = { levels: new Set(Object.keys(LEVEL_RGB)), region: null };
-    this.r.onClick = m => m && m.pick && this.h.onSelect(m.pick.kind, m.pick.id, m.pick);
+    this.countries = []; this.states = null; this.tip = document.getElementById("hoverTip");
+    this.r.onClick = (m, g) => {
+      if (m && m.pick) return this.h.onSelect(m.pick.kind, m.pick.id, m.pick);
+      if (!g) return; const lon = g[0] / K, lat = -g[2] / K;
+      const st = this.states && hitArea(this.states.states, lon, lat);
+      if (st) return this.h.onSelect("state", st.name, { data: st, country: this.states.country });
+      const c = hitArea(this.countries, lon, lat); if (c) this.h.onSelect("country", c.name, { data: c });
+    };
+    let pending = false;
+    this.r.onHover = e => { if (pending || !this.tip) return; pending = true; requestAnimationFrame(() => { pending = false; this._hover(e); }); };
     this.r.onFrame = () => this._placeLabels();
-    this.r.onCamera = () => {};
+  }
+  _hover(e) {
+    const rc = this.r.canvas.getBoundingClientRect(), g = this.r.groundPoint(e.clientX - rc.left, e.clientY - rc.top);
+    if (!g) { this.tip.style.display = "none"; return; }
+    const lon = g[0] / K, lat = -g[2] / K, st = this.states && hitArea(this.states.states, lon, lat), c = hitArea(this.countries, lon, lat);
+    if (!c && !st) { this.tip.style.display = "none"; return; }
+    this.tip.textContent = st ? `${st.name} · ${c ? (c.name_pt || c.name) : ""}` : (c.name_pt || c.name);
+    this.tip.style.display = ""; this.tip.style.left = (e.clientX - rc.left + 14) + "px"; this.tip.style.top = (e.clientY - rc.top + 10) + "px";
+  }
+  // Camada do mapa: textura (oceano/terra/países com operação) + fronteiras em lote.
+  setGeo(geo) {
+    if (!geo || !geo.available) return;
+    this.countries = geo.countries; this._paint();
+    this.r.addLineSet("paises", segments(this.countries, 0.25), [0.40, 0.75, 1.0, 0.55]);
+  }
+  _paint() {
+    if (!this.countries.length) return;
+    const W = this.r.lite ? 2048 : 4096, H = W / 2, cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+    const g = cv.getContext("2d"), X = lon => (lon + 180) / 360 * W, Y = lat => (90 - lat) / 180 * H;
+    g.fillStyle = "#040a1a"; g.fillRect(0, 0, W, H);
+    g.strokeStyle = "rgba(90,120,200,0.12)"; g.lineWidth = 1;
+    for (let lon = -180; lon <= 180; lon += 15) { g.beginPath(); g.moveTo(X(lon), 0); g.lineTo(X(lon), H); g.stroke(); }
+    for (let lat = -90; lat <= 90; lat += 15) { g.beginPath(); g.moveTo(0, Y(lat)); g.lineTo(W, Y(lat)); g.stroke(); }
+    const active = new Set(Object.values((this.data && this.data.region_country) || {}).filter(n =>
+      this.data.partners.some(p => (this.data.region_country || {})[p.region_code] === n)));
+    for (const c of this.countries) {
+      g.fillStyle = active.has(c.name) ? "#0f3a44" : "#0e1a33"; g.beginPath();
+      for (const r of c.rings) { g.moveTo(X(r[0]), Y(r[1])); for (let i = 2; i < r.length; i += 2) g.lineTo(X(r[i]), Y(r[i + 1])); g.closePath(); }
+      g.fill("evenodd");
+    }
+    this._active = [...active].sort().join("|"); this.r.setTexture(cv);
+  }
+  setStates(st) {
+    this.states = st && st.states && st.states.length ? st : null;
+    this.labels.filter(L => L.key.startsWith("estado:")).forEach(L => { L.el.remove(); this.labels.splice(this.labels.indexOf(L), 1); });
+    this.r.removeLineSet("estados");
+    if (!this.states) return;
+    this.r.addLineSet("estados", segments(this.states.states, 0.3), [0.75, 0.55, 1.0, 0.45]);
+    for (const s of this.states.states) {
+      const b = s.bbox; this._label("estado:" + s.name, esc(s.code || s.name), ll((b[1] + b[3]) / 2, (b[0] + b[2]) / 2), { kind: "state", id: s.name, data: s, country: st.country },
+        false, null, "estado", [0, 2600]);
+    }
+  }
+  _place(p) {  // evita sobreposição de prédios na mesma cidade (espiral determinística)
+    const cell = 18; for (let i = 0; i < 60; i++) {
+      const a = i * 2.4, rr = i ? cell * (0.8 + i * 0.18) : 0, q = [p[0] + Math.cos(a) * rr, 0, p[2] + Math.sin(a) * rr];
+      const key = `${Math.round(q[0] / cell)},${Math.round(q[2] / cell)}`; if (!this.occ.has(key)) { this.occ.add(key); return q; }
+    }
+    return p;
+  }
+  _coordOf(lat, lng, region) {
+    if (lat != null && lng != null) return { pos: ll(lat, lng), approx: false };
+    const c = ((this.data && this.data.country_center) || {})[region] || [0, 0];
+    return { pos: ll(c[0], c[1]), approx: true };
   }
   build(data) {
-    this.data = data; const r = this.r; r.clear(); this.objs.clear();
+    this.data = data; const r = this.r; r.clear(); this.objs.clear(); this.occ = new Set();
     this.labelsEl.innerHTML = ""; this.labels = [];
-    r.add({ pos: [0, -1, 20], scale: [620, 1, 520], color: [0.030, 0.045, 0.100], grid: 1 });
-    this._scenery();
+    r.add({ pos: [0, -1, 0], scale: [360 * K + 4000, 1, 180 * K + 4000], color: [0.02, 0.04, 0.10], tex: 1 });
+    const act = Object.values(data.region_country || {}).filter(n => data.partners.some(p => (data.region_country || {})[p.region_code] === n)).sort().join("|");
+    if (this.countries.length && act !== this._active) this._paint();
     const central = data.view === "central";
-    // prédio central e setores
+    const HQ = this.HQ = this._place(ll(data.hq.lat, data.hq.lng));
     const hq = r.add({ pos: HQ, scale: [16, 52, 16], color: [0.10, 0.14, 0.30], win: 1, edge: 1, winColor: [0.70, 0.55, 1.0], pick: { kind: "hq", id: "hq" } });
     r.add({ pos: add3(HQ, [0, 52, 0]), scale: [10, 4, 10], color: [0.37, 0.92, 0.83], emissive: 0.6 });
-    r.add({ pos: add3(HQ, [0, 56, 0]), scale: [1.2, 22, 1.2], color: [0.65, 0.55, 1.0], emissive: 0.9 });  // antena
-    for (const [y, s] of [[18, 26], [32, 23], [46, 20]])  // anéis holográficos (cenário)
-      r.add({ pos: add3(HQ, [0, y, 0]), scale: [s, 0.35, s], color: [0.37, 0.92, 0.83], emissive: 0.8, alpha: 0.28 });
-    this.objs.set("hq", hq); this._label("hq", "Administração central", add3(HQ, [0, 60, 0]), { kind: "hq", id: "hq" });
+    r.add({ pos: add3(HQ, [0, 56, 0]), scale: [1.2, 22, 1.2], color: [0.65, 0.55, 1.0], emissive: 0.9 });
+    for (const [y, s] of [[18, 26], [32, 23], [46, 20]]) r.add({ pos: add3(HQ, [0, y, 0]), scale: [s, 0.35, s], color: [0.37, 0.92, 0.83], emissive: 0.8, alpha: 0.28 });
+    r.add({ pos: add3(HQ, [0, 0, 0]), scale: [90, 0.3, 90], color: [0.37, 0.92, 0.83], emissive: 0.4, alpha: 0.18 });  // sinal visível de longe
+    this.objs.set("hq", hq); this._label("hq", "Administração central", add3(HQ, [0, 60, 0]), { kind: "hq", id: "hq" }, false, null, null, [0, 14000]);
+    for (const k of Object.keys(SECTOR_OFF)) this.occ.add(`${Math.round((HQ[0] + SECTOR_OFF[k][0]) / 18)},${Math.round((HQ[2] + SECTOR_OFF[k][2]) / 18)}`);
     if (central) for (const s of data.sectors) {
-      const m = r.add({ pos: SECTORS[s.code], scale: [12, 12, 12], color: SECTOR_COLOR[s.code], win: 1, pick: { kind: "sector", id: s.code, data: s } });
-      this.objs.set("sector:" + s.code, m); this._label("sector:" + s.code, `${s.name}<small> · ${esc(s.metric)}</small>`, add3(SECTORS[s.code], [0, 15, 0]), { kind: "sector", id: s.code }, true);
+      const pos = add3(HQ, SECTOR_OFF[s.code]);
+      const m = r.add({ pos, scale: [12, 12, 12], color: SECTOR_COLOR[s.code], win: 1, pick: { kind: "sector", id: s.code, data: s } });
+      this.objs.set("sector:" + s.code, m); this._label("sector:" + s.code, `${s.name}<small> · ${esc(s.metric)}</small>`, add3(pos, [0, 15, 0]), { kind: "sector", id: s.code }, true);
     }
-    // regiões
+    // países com operação: rótulo visível de longe
     for (const reg of data.regions) {
-      const rp = REGION_POS[reg.code]; if (!rp) continue;
-      const hasPartner = data.partners.some(p => p.region_code === reg.code); if (!central && !hasPartner) continue;
-      const rows = Math.max(1, Math.ceil(data.partners.filter(p => p.region_code === reg.code).length / 3));
-      const maxZ = 6 + 22 * (rows - 1) + 14, minZ = -32;
-      const plat = r.add({ pos: [rp[0], 0, rp[2] + (minZ + maxZ) / 2], scale: [74, 0.6, maxZ - minZ], color: REGION_TINT[reg.code], pick: { kind: "region", id: reg.code, data: reg } });
-      this.objs.set("region:" + reg.code, plat);
-      this._label("region:" + reg.code, `${esc(reg.name)} <small>${reg.sales_enabled ? "vendas liberadas" : "vendas bloqueadas"}</small>`, add3(rp, [-26, 3, -33]), { kind: "region", id: reg.code }, false);
-      r.lines.push({ a: add3(HQ, [0, 40, 0]), b: add3(rp, [-20, 7, -18]), color: [0.37, 0.92, 0.83, 0.35] });
+      const n = (data.partners.filter(p => p.region_code === reg.code)).length; if (!n && !central) continue;
+      const c = (data.country_center || {})[reg.code]; if (!c) continue;
+      this._label("region:" + reg.code, `${esc(reg.name)} <small>${n} cliente(s)/parceiro(s) · ${reg.sales_enabled ? "vendas liberadas" : "vendas bloqueadas"}</small>`,
+        ll(c[0], c[1]), { kind: "region", id: reg.code, data: reg }, false, null, "pais", [1800, 14000]);
     }
     for (const w of data.warehouses) {
-      const rp = REGION_POS[w.region_code]; if (!rp) continue;
-      const pos = add3(rp, [-20, 0.6, -18]);
+      const { pos: p0 } = this._coordOf(w.lat, w.lng, w.region_code), pos = this._place(p0);
       const m = r.add({ pos, scale: [24, 7, 13], color: [0.22, 0.26, 0.33], pick: { kind: "warehouse", id: w.id, data: w } });
       if (w.low) r.add({ pos: add3(pos, [0, 7, 0]), scale: [24, 0.5, 13], color: LEVEL_RGB.amarelo, emissive: 0.5, alpha: 0.7 });
       this.objs.set("warehouse:" + w.id, m);
       this._label("warehouse:" + w.id, `${esc(w.name)} <small>${w.stock.on_hand - w.stock.reserved} disp. · ${w.stock.reserved} reserv.</small>`, add3(pos, [0, 10, 0]), { kind: "warehouse", id: w.id }, true);
+      r.lines.push({ a: add3(HQ, [0, 40, 0]), b: add3(pos, [0, 7, 0]), color: [0.37, 0.92, 0.83, 0.35] });
     }
-    // bases/filiais de serviço (suas unidades): prédios técnicos com antena, ligados às unidades que atendem
-    (data.service_bases || []).forEach((sb, i) => {
-      const pos = add3(REGION_POS.BR, [0 + (i % 3) * 14, 0.6, -24 - Math.floor(i / 3) * 12]);
-      sb._pos = pos;
+    (data.service_bases || []).forEach(sb => {
+      const { pos: p0 } = this._coordOf(sb.lat, sb.lng, "BR"), pos = this._place(p0); sb._pos = pos;
       r.add({ pos, scale: [9, 12, 7], color: [0.10, 0.22, 0.30], win: 1, edge: 1, winColor: [0.35, 1.0, 0.75], pick: { kind: "base", id: sb.id, data: sb } });
       r.add({ pos: add3(pos, [0, 12, 0]), scale: [0.6, 7, 0.6], color: [0.35, 1.0, 0.75], emissive: 1.0 });
+      r.add({ pos, scale: [30, 0.3, 30], color: [0.35, 1.0, 0.75], emissive: 0.5, alpha: 0.2 });
       this.objs.set("base:" + sb.id, { pos, home: pos });
       this._label("base:" + sb.id, `<span class="sw" style="background:#5ff5c0"></span>Base · ${esc(sb.name)} <small>${esc(sb.city || "")} · ${sb.tecnicos} técnico(s)${sb.pendentes ? ` · ${sb.pendentes} aguardando` : ""}</small>`,
-        add3(pos, [0, 21, 0]), { kind: "base", id: sb.id, data: sb }, false);
+        add3(pos, [0, 21, 0]), { kind: "base", id: sb.id, data: sb }, false, null, null, [0, 5000]);
     });
-    // parceiros
-    const byRegion = {};
-    for (const p of data.partners) (byRegion[p.region_code] = byRegion[p.region_code] || []).push(p);
-    for (const [code, list] of Object.entries(byRegion)) {
-      const rp = REGION_POS[code];
-      list.forEach((p, i) => {
-        const pos = add3(rp, [-14 + (i % 3) * 19, 0.6, 6 + Math.floor(i / 3) * 22]);
-        const lvl = p.status.level, h = 20 + Math.min(p.units.length, 4) * 5;
-        const visible = this._passes(p);
-        const base = r.add({ pos: add3(pos, [0, 0, 0]), scale: [13, 0.5, 13], color: LEVEL_RGB[lvl], emissive: 0.35, alpha: 0.55, visible });
-        const b = r.add({ pos, scale: [9, h, 9], color: [0.10, 0.15, 0.27], win: 1, edge: 1, visible, pick: { kind: "partner", id: p.id, data: p } });
-        r.add({ pos: add3(pos, [0, h + 1.6, 0]), scale: [9.6, 0.25, 9.6], color: [0.37, 0.92, 0.83], emissive: 0.7, alpha: 0.35, visible });  // heliponto do CEO
-        const beacon = r.add({ pos: add3(pos, [0, h, 0]), scale: [4, 1.6, 4], color: LEVEL_RGB[lvl], emissive: 0.9, visible, pick: { kind: "status", id: p.id, data: p } });
-        p.units.forEach((u, j) => r.add({ pos: add3(pos, [7.5, 0, -3 + j * 4]), scale: [3, 3.5, 3], color: u.location_status === "confirmada" ? [0.25, 0.45, 0.6] : [0.22, 0.25, 0.3], visible,
-          pick: { kind: "unit", id: u.id, data: { ...u, partner: p.name } } }));
-        this.objs.set("partner:" + p.id, b); this.objs.set("partnerparts:" + p.id, [base, beacon]);
-        b.home = pos; b.h = h;
-        this._label("partner:" + p.id, `<span class="sw" style="background:rgb(${LEVEL_RGB[lvl].map(x => x * 255 | 0)})"></span>${esc(p.name)} <small>· ${statusText(lvl)}</small>`,
-          add3(pos, [0, h + 4, 0]), { kind: "partner", id: p.id }, false, () => this._passes(p));
-        r.lines.push({ a: add3(rp, [-20, 7, -18]), b: add3(pos, [0, 2, 0]), color: [0.65, 0.55, 0.98, visible ? 0.35 : 0.05] });
+    for (const p of data.partners) {
+      const u0 = p.units.find(u => u.lat != null) || p.units[0] || {};
+      const { pos: p0, approx } = this._coordOf(u0.lat, u0.lng, p.region_code), pos = this._place(p0);
+      const lvl = p.status.level, h = 20 + Math.min(p.units.length, 4) * 5, visible = this._passes(p);
+      const base = r.add({ pos, scale: [13, 0.5, 13], color: LEVEL_RGB[lvl], emissive: 0.35, alpha: 0.55, visible });
+      const ring = r.add({ pos, scale: [44, 0.25, 44], color: LEVEL_RGB[lvl], emissive: 0.5, alpha: 0.22, visible });  // visível de longe
+      const b = r.add({ pos, scale: [9, h, 9], color: [0.10, 0.15, 0.27], win: 1, edge: 1, visible, pick: { kind: "partner", id: p.id, data: p } });
+      r.add({ pos: add3(pos, [0, h + 1.6, 0]), scale: [9.6, 0.25, 9.6], color: [0.37, 0.92, 0.83], emissive: 0.7, alpha: 0.35, visible });
+      const beacon = r.add({ pos: add3(pos, [0, h, 0]), scale: [4, 1.6, 4], color: LEVEL_RGB[lvl], emissive: 0.9, visible, pick: { kind: "status", id: p.id, data: p } });
+      p.units.forEach((u, j) => {
+        const own = u.lat != null && u !== u0 ? this._place(ll(u.lat, u.lng)) : add3(pos, [7.5, 0, -3 + j * 4]);
+        r.add({ pos: own, scale: [3, 3.5, 3], color: u.location_status === "confirmada" ? [0.25, 0.45, 0.6] : [0.22, 0.25, 0.3], visible,
+          pick: { kind: "unit", id: u.id, data: { ...u, partner: p.name } } });
+        if (u.lat != null && u !== u0) {
+          r.lines.push({ a: add3(pos, [0, 2, 0]), b: add3(own, [0, 2, 0]), color: [0.60, 0.80, 1.0, visible ? 0.35 : 0.05] });
+          this._label("unit:" + u.id, `${esc(u.name)} <small>${esc(u.city || "")}</small>`, add3(own, [0, 6, 0]), { kind: "unit", id: u.id, data: { ...u, partner: p.name } }, true, () => this._passes(p));
+        }
       });
+      this.objs.set("partner:" + p.id, b); this.objs.set("partnerparts:" + p.id, [base, beacon, ring]);
+      b.home = pos; b.h = h; b.approx = approx;
+      this._label("partner:" + p.id, `<span class="sw" style="background:rgb(${LEVEL_RGB[lvl].map(x => x * 255 | 0)})"></span>${esc(p.name)} <small>· ${statusText(lvl)}${approx ? " · local a definir" : ""}</small>`,
+        add3(pos, [0, h + 4, 0]), { kind: "partner", id: p.id }, false, () => this._passes(p), null, [0, 4500]);
+      const wh = data.warehouses.find(w => w.region_code === p.region_code), whm = wh && this.objs.get("warehouse:" + wh.id);
+      r.lines.push({ a: whm ? add3(whm.pos, [0, 7, 0]) : add3(HQ, [0, 40, 0]), b: add3(pos, [0, 2, 0]), color: [0.65, 0.55, 0.98, visible ? 0.35 : 0.05] });
     }
-    for (const sb of data.service_bases || []) {  // rede de atendimento: base → prédio do cliente
+    for (const sb of data.service_bases || []) {
       for (const pid of new Set(sb.units.map(u => u.partner_id))) {
         const b = this.objs.get("partner:" + pid); if (b) r.lines.push({ a: add3(sb._pos, [0, 12, 0]), b: add3(b.home, [0, 3, 0]), color: [0.35, 1.0, 0.75, 0.45] });
       }
     }
+    if (this.states) this.setStates(this.states);
     this._buildAgents(data.agents);
     if (this.inside) this.enterBuilding(this.inside, true);
     r.dirty = true;
@@ -133,41 +221,30 @@ export class World {
     this._label("agent:" + a.id, `<span class="sw" style="background:rgb(${col.map(x => x * 255 | 0)})"></span>${esc(a.name)} <small>· ${AGENT_LABEL[a.status] || a.status}</small>`,
       add3(top, [0, 9.5, 0]), { kind: "agent", id: a.id }, true, null, "agent ceo");
   }
-  // Cenário futurista decorativo e ESTÁTICO (não representa atividade): skyline distante e vias de luz.
-  _scenery() {
-    const r = this.r; let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    for (let i = 0; i < (r.lite ? 0 : 46); i++) {
-      const ang = (i / 46) * Math.PI * 2, rad = 250 + rnd() * 50, h = 30 + rnd() * 90, w = 8 + rnd() * 10;
-      r.add({ pos: [Math.cos(ang) * rad, 0, 20 + Math.sin(ang) * rad * 0.8], scale: [w, h, w], color: [0.06, 0.07, 0.15], win: 1, edge: 1,
-        winColor: rnd() > 0.5 ? [0.85, 0.35, 1.0] : [0.30, 0.80, 1.0] });
-    }
-    for (const z of [-80, 30, 130]) r.lines.push({ a: [-300, 0.2, z], b: [300, 0.2, z], color: [0.55, 0.30, 1.0, 0.25] });
-    for (const x of [-180, -50, 50, 180]) r.lines.push({ a: [x, 0.2, -200], b: [x, 0.2, 240], color: [0.30, 0.85, 1.0, 0.18] });
-  }
   _agentTarget(a) {
     const idx = (this.data.agents.indexOf(a) % 4) * 2.4 - 3.6;
     if (a.current_partner_id) { const b = this.objs.get("partner:" + a.current_partner_id); if (b) return add3(b.home, [-7, 0, 6 + idx * 0.5]); }
-    const home = AGENT_HOME[a.code] || [0, 0, 8];
-    return a.enabled ? add3(home, [idx, 0, 9]) : add3(HQ, [idx * 1.5, 0, 22]);
+    const home = add3(this.HQ, AGENT_HOME[a.code] || [0, 0, 28]);
+    return a.enabled ? add3(home, [idx, 0, 9]) : add3(this.HQ, [idx * 1.5, 0, 40]);
   }
-  _label(key, html, p, pick, small, visibleFn, cls) {
-    if (this.r.lite && cls === "agent") { /* em modo leve, avatares sem rótulo flutuante (dados seguem nas tabelas) */ }
+  _label(key, html, p, pick, small, visibleFn, cls, range) {
     const el = document.createElement("button"); el.className = "lbl" + (cls ? " " + cls : ""); el.innerHTML = html; el.type = "button";
     el.setAttribute("aria-label", el.textContent);
     el.addEventListener("click", ev => { ev.stopPropagation(); this.h.onSelect(pick.kind, pick.id, pick); });
     this.labelsEl.appendChild(el);
-    const L = { key, el, p, small, visibleFn, cls }; this.labels.push(L); return L;
+    const L = { key, el, p, small, visibleFn, cls, range: range || (small ? [0, 700] : [0, 4500]) }; this.labels.push(L); return L;
   }
   _placeLabels() {
-    const zoomedOut = this.r.cam.dist > 250;
+    const d = this.r.cam.dist;
     for (const L of this.labels) {
-      const vis = (!L.visibleFn || L.visibleFn()) && !(this.r.lite && L.cls === "agent") && !(zoomedOut && L.small) && !(this.inside && L.cls === "agent" && false);
+      const vis = (!L.visibleFn || L.visibleFn()) && !(this.r.lite && L.cls === "agent") && d >= L.range[0] && d <= L.range[1];
       const s = vis ? this.r.project(L.p) : null;
       if (!s) { L.el.style.display = "none"; continue; }
       L.el.style.display = ""; L.el.style.left = s.x + "px"; L.el.style.top = s.y + "px"; L.el.style.zIndex = String(1000 - Math.round(s.depth * 500));
     }
   }
   _passes(p) { return this.filters.levels.has(p.status.level) && (!this.filters.region || this.filters.region === p.region_code); }
+  countryByRegion(code) { const n = ((this.data && this.data.region_country) || {})[code]; return this.countries.find(c => c.name === n); }
   setFilters(f) { Object.assign(this.filters, f); if (this.data) this.build(this.data); }
   fly(target, dist, pitch = 0.75, yaw) {
     const asp = this.r.canvas.clientWidth / Math.max(1, this.r.canvas.clientHeight);
@@ -175,12 +252,19 @@ export class World {
     to(this.r.cam, { tx: target[0], ty: target[1], tz: target[2], dist, pitch, ...(yaw !== undefined ? { yaw } : {}), duration: 1.3, ease: "power3.inOut",
       onUpdate: () => (this.r.dirty = true) });
   }
-  focus(kind, id) {
-    if (kind === "global") return this.fly([0, 0, 10], 260, 0.85, 0.5);
-    if (kind === "region") return this.fly(add3(REGION_POS[id], [0, 0, 5]), 120, 0.8);
+  flyBox(b, pitch = 1.05) {
+    const w = (b[2] - b[0]) * K, h = (b[3] - b[1]) * K;
+    this.fly(ll((b[1] + b[3]) / 2, (b[0] + b[2]) / 2), Math.min(12000, Math.max(160, Math.max(w, h) * 1.15)), pitch, 0);
+  }
+  focus(kind, id, extra) {
+    if (kind === "global") { const c = this.HQ || [0, 0, 0]; return this.fly([c[0] + 30 * K, 0, c[2] - 25 * K], 9500, 1.2, 0); }
+    if (kind === "region") { const c = this.countryByRegion(id); if (c) return this.flyBox(c.bbox); const cc = (this.data.country_center || {})[id]; if (cc) this.fly(ll(cc[0], cc[1]), 2500, 1.05, 0); return; }
+    if (kind === "country") { const c = this.countries.find(x => x.name === id); if (c) this.flyBox(c.bbox); return; }
+    if (kind === "state") { if (extra && extra.bbox) this.flyBox(extra.bbox, 0.95); return; }
     if (kind === "partner") { const b = this.objs.get("partner:" + id); if (b) this.fly(add3(b.home, [0, b.h / 2, 0]), 70, 0.45); return; }
-    if (kind === "hq") return this.fly(add3(HQ, [0, 15, 0]), 110, 0.6);
-    if (kind === "sector") return this.fly(SECTORS[id], 55, 0.6);
+    if (kind === "hq") return this.fly(add3(this.HQ, [0, 15, 0]), 130, 0.6);
+    if (kind === "sector") return this.fly(add3(this.HQ, SECTOR_OFF[id]), 55, 0.6);
+    if (kind === "base") { const m = this.objs.get("base:" + id); if (m) this.fly(m.pos, 70, 0.55); return; }
     if (kind === "warehouse") { const m = this.objs.get("warehouse:" + id); if (m) this.fly(m.pos, 60, 0.6); }
     if (kind === "agent") { const m = this.objs.get("agent:" + id); if (m) this.fly(m.pos, 40, 0.5); }
   }
@@ -214,14 +298,17 @@ export class World {
       return;
     }
     if (ev.type.startsWith("ceo.") && ev.partner_id) {
-      const ceo = this.objs.get("ceo:" + ev.partner_id); if (ceo) this.r.pulse(add3(HQ, [0, 56, 0]), add3(ceo.pos, [0, 5, 0]), [0.65, 0.55, 1.0], 1.6);
+      const ceo = this.objs.get("ceo:" + ev.partner_id); if (ceo) this.r.pulse(add3(this.HQ, [0, 56, 0]), add3(ceo.pos, [0, 5, 0]), [0.65, 0.55, 1.0], 1.6);
       return;
     }
     if (!ev.partner_id) return; const b = this.objs.get("partner:" + ev.partner_id); if (!b) return;
     const color = ev.type.startsWith("pagamento") ? [0.20, 0.83, 0.60] : ev.type.startsWith("estoque") ? [0.98, 0.75, 0.14]
       : ev.type.startsWith("comissao") ? [0.65, 0.55, 0.98] : ev.type.startsWith("envio") ? [0.38, 0.65, 1.0] : [0.37, 0.92, 0.83];
-    const reg = REGION_POS[(this.data.partners.find(p => p.id === ev.partner_id) || {}).region_code];
-    const from = ev.type.startsWith("estoque") || ev.type.startsWith("envio") ? add3(reg, [-20, 7, -18]) : add3(HQ, [0, 40, 0]);
+    const p = this.data.partners.find(x => x.id === ev.partner_id) || {}, wh = this.data.warehouses.find(w => w.region_code === p.region_code);
+    const whm = wh && this.objs.get("warehouse:" + wh.id);
+    const color2 = ev.type.startsWith("whatsapp") ? [0.15, 0.85, 0.40] : color;
+    const from = (ev.type.startsWith("estoque") || ev.type.startsWith("envio")) && whm ? add3(whm.pos, [0, 7, 0]) : add3(this.HQ, [0, 40, 0]);
+    if (ev.type.startsWith("whatsapp")) return this.r.pulse(add3(b.home, [0, b.h + 30, 0]), add3(b.home, [0, b.h, 0]), color2, 1.2);
     this.r.pulse(from, add3(b.home, [0, b.h, 0]), color);
   }
 }

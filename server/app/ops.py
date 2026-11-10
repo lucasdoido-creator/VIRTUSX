@@ -89,7 +89,10 @@ def world(actor: Principal):
         b["units"] = R.db.all("SELECT id, partner_id FROM partner_units WHERE base_id=? AND active=1", b["id"])
         b["tecnicos"] = R.db.val("SELECT COUNT(*) FROM users WHERE base_id=? AND role='tecnico' AND active=1", b["id"])
         b["pendentes"] = R.db.val("SELECT COUNT(*) FROM users WHERE base_id=? AND role='tecnico' AND active=0", b["id"])
+    from . import geo
     return {
+        "hq": {"lat": R.settings.hq_lat, "lng": R.settings.hq_lng},
+        "region_country": geo.REGION_COUNTRY, "country_center": geo.COUNTRY_CENTER, "geo": geo.status(),
         "service_bases": bases,
         "environment": R.settings.env, "generated_at": iso(), "view": "central" if actor.is_central else "parceiro",
         "regions": regions, "partners": partners, "warehouses": whs if actor.is_central else

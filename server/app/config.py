@@ -30,6 +30,13 @@ class Settings:
     brain_daily_cap_usd: float = 0.20
     routine_fallback_to_claude: bool = False
     research_enabled: bool = True
+    whatsapp_token: str = ""
+    whatsapp_phone_number_id: str = ""
+    whatsapp_app_secret: str = ""
+    whatsapp_verify_token: str = ""
+    whatsapp_api_version: str = "v24.0"
+    hq_lat: float = -23.5505
+    hq_lng: float = -46.6333
     webhook_tolerance_s: int = 300
     max_webhook_attempts: int = 5
     reservation_ttl_min: int = 30
@@ -81,6 +88,13 @@ def load_settings(**overrides) -> Settings:
         brain_daily_cap_usd=float(os.environ.get("BRAIN_DAILY_CAP_USD", "0.20")),
         routine_fallback_to_claude=os.environ.get("BRAIN_ROUTINE_FALLBACK_CLAUDE", "0") == "1",
         research_enabled=os.environ.get("RESEARCH", "1") == "1",
+        whatsapp_token=os.environ.get("WHATSAPP_TOKEN", ""),
+        whatsapp_phone_number_id=os.environ.get("WHATSAPP_PHONE_NUMBER_ID", ""),
+        whatsapp_app_secret=os.environ.get("WHATSAPP_APP_SECRET", ""),
+        whatsapp_verify_token=os.environ.get("WHATSAPP_VERIFY_TOKEN", ""),
+        whatsapp_api_version=os.environ.get("WHATSAPP_API_VERSION", "v24.0"),
+        hq_lat=float(os.environ.get("HQ_LAT", "-23.5505")),
+        hq_lng=float(os.environ.get("HQ_LNG", "-46.6333")),
         scheduler_enabled=os.environ.get("SCHEDULER", "1") == "1",
         scheduler_interval_s=float(os.environ.get("SCHEDULER_INTERVAL_S", "5")),
     )

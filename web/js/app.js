@@ -69,12 +69,17 @@ async function start() {
     S.w = new World(S.renderer, $("#labels"), { onSelect: select });
     S.w.build(S.world);
     if (S.world.view === "parceiro" && S.world.partners[0]) S.w.focus("partner", S.world.partners[0].id); else S.w.focus("global");
+    api("/api/geo/countries").then(g => { S.geo = g; if (g.available) S.w.setGeo(g); else toast("Mapa real ainda não baixado: o servidor precisa de internet uma vez.", true); }).catch(() => {});
   } catch (e) {
     $("#stage").innerHTML = `<div class="card" style="margin:60px auto;max-width:520px">O modo 3D não está disponível neste dispositivo (${esc(e.message)}). Todas as informações estão no modo tabelas.</div>`;
     setView("tabelas");
   }
   if (S.lite || innerWidth < 760) $("#legend").classList.add("hidden");
-  renderCrumbs([["Global", () => { S.w && S.w.exitBuilding(); S.w && S.w.focus("global"); closePanel(); }]]);
+  renderCrumbs([["Mundo", goWorld]]);
+  $("#cmdBtn").onclick = openCommands; $("#inboxBtn").onclick = () => { S.tab = "atendimento"; setView("tabelas"); };
+  if (!can("comandos.run")) $("#cmdBtn").classList.add("hidden");
+  if (!can("atendimento.read")) $("#inboxBtn").classList.add("hidden"); else updateUnread();
+  document.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openCommands(); } });
   updateHeader();
   S.live = new Live({ onEvent, onState: liveState, onResync: () => { toast("Conexão restabelecida — dados sincronizados"); refresh(); } });
   S.live.start(S.world.last_event_id);
@@ -84,6 +89,7 @@ async function start() {
 function startTecnico() {
   S.world = { partners: [], agents: [], regions: [], warehouses: [], sectors: [], service_bases: [] };
   $("#viewSeg").classList.add("hidden"); $("#search").classList.add("hidden"); $("#live").classList.add("hidden");
+  $("#cmdBtn").classList.add("hidden"); $("#inboxBtn").classList.add("hidden");
   S.tab = "tarefas"; setView("tabelas");
   setInterval(() => { if (!S.panel) renderTables(true); }, 30000);
 }
@@ -102,6 +108,7 @@ function onEvent(ev) {
   $("#ticker").innerHTML = `<span>Últimos eventos:</span>` + S.ticker.slice(0, 5).map(e =>
     `<span title="ocorrido ${fmtTime(e.occurred_at)} · recebido ${fmtTime(e.received_at)}"><b>${esc(e.type)}</b> ${esc(e.status)} · ${new Date(e.received_at).toLocaleTimeString("pt-BR")}</span>`).join("");
   if (S.w) S.w.pulseFor(ev);
+  if (ev.type.startsWith("whatsapp") || ev.type.startsWith("canal")) { updateUnread(); if (S.view === "tabelas" && S.tab === "atendimento") renderTables(true); }
   if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; refresh(); }, 800); // agrupa rajadas de eventos
 }
 function liveState(s, lostAt) {
@@ -128,19 +135,25 @@ async function refresh() {
 function renderCrumbs(items) {
   $("#crumbs").innerHTML = ""; items.forEach(([t, fn], i) => { const b = document.createElement("button"); b.textContent = (i ? "› " : "") + t; b.onclick = fn; $("#crumbs").appendChild(b); });
 }
+function goWorld() { S.w && S.w.exitBuilding(); S.w && S.w.setStates(null); S.w && S.w.focus("global"); closePanel(); renderCrumbs([["Mundo", goWorld]]); }
+const regionOfCountry = name => Object.entries(S.world.region_country || {}).find(([, n]) => n === name)?.[0];
+const countryName = name => ((S.geo && S.geo.countries || []).find(c => c.name === name) || {}).name_pt || name;
 function select(kind, id, pick) {
   const W = S.w; const p = (S.world.partners || []).find(x => x.id === id);
+  if (kind === "region") { const n = (S.world.region_country || {})[id]; if (n) return select("country", n, {}); }
+  if (kind === "country") { W && W.exitBuilding(); W && W.focus("country", id);
+    renderCrumbs([["Mundo", goWorld], [countryName(id), () => select("country", id, {})]]); return openCountry(id); }
+  if (kind === "state") { W && W.exitBuilding(); W && W.focus("state", id, pick.data && pick.data.bbox ? pick.data : null);
+    renderCrumbs([["Mundo", goWorld], [countryName(pick.country), () => select("country", pick.country, {})], [id, () => select("state", id, pick)]]);
+    return openState(pick.data, pick.country); }
   if (kind === "partner" || kind === "status") {
     if (W) { W.focus("partner", id); W.enterBuilding(id); }
-    const reg = p && S.world.regions.find(r => r.code === p.region_code);
-    renderCrumbs([["Global", () => { W && W.exitBuilding(); W && W.focus("global"); closePanel(); }],
-      [reg ? reg.name : "Região", () => select("region", p.region_code)], [p ? p.name : id, () => select("partner", id)]]);
+    const cn = p && (S.world.region_country || {})[p.region_code];
+    renderCrumbs([["Mundo", goWorld], [cn ? countryName(cn) : "País", () => cn && select("country", cn, {})], [p ? p.name : id, () => select("partner", id)]]);
     return openBuilding(id, kind === "status" ? "status" : "recepcao");
   }
   if (kind === "floor") { if (W) W.highlightFloor(id); return openBuilding(pick.partner || S.panel?.partner, id); }
   if (W) W.exitBuilding();
-  if (kind === "region") { W && W.focus("region", id); const reg = S.world.regions.find(r => r.code === id);
-    renderCrumbs([["Global", () => { W && W.focus("global"); closePanel(); }], [reg.name, () => select("region", id)]]); return openRegion(id); }
   if (W) W.focus(kind, id);
   if (kind === "hq") return openHQ();
   if (kind === "sector") return openSector(id);
@@ -167,8 +180,9 @@ function closePanel() { if (!S.panel) return; S.panel = null; const el = $("#pan
 
 // ---------- prédio do parceiro
 async function openBuilding(pid, floor = "recepcao") {
-  const [b, ceoData] = await Promise.all([api(`/api/partners/${pid}/building`), can("ventures.read") ? api(`/api/partners/${pid}/ceo`).catch(() => null) : null]);
-  b.ceo = ceoData; const p = b.partner;
+  const [b, ceoData, convs] = await Promise.all([api(`/api/partners/${pid}/building`), can("ventures.read") ? api(`/api/partners/${pid}/ceo`).catch(() => null) : null,
+    can("atendimento.read") ? api(`/api/conversations?partner_id=${pid}`).catch(() => []) : []]);
+  b.ceo = ceoData; b.convs = convs; const p = b.partner;
   const sub = `${st(b.status.level)} ${p.is_demo ? badge("DEMONSTRAÇÃO", "sim") : ""} ${badge(p.commercial_model === "central_commission" ? "Venda central + comissão" : "Revenda B2B (não operacional)")} · ${esc(p.region_name)}`;
   const tabs = [["status", "Sinalização"], ...FLOORS];
   const render = f => {
@@ -187,6 +201,10 @@ function brainLine(br) {
   return `<div class="row">${o} ${c}<span class="muted">${sp}</span></div>${br.ollama.ok ? "" : `<div class="muted">Sem IA local, o CEO usa plano-modelo e só fontes/medidas determinísticas. Para ativar grátis: instale o Ollama e rode <span class="mono">ollama pull ${esc(br.ollama.model)}</span>.</div>`}`;
 }
 const FLOOR_RENDER = {
+  atendimento: b => { const cs = b.convs || [];
+    return `<p class="muted">Conversas de WhatsApp deste cliente. A caixa completa fica em <b>Atendimento</b>.</p>
+      ${cs.map(c => `<div class="card click" data-conv="${c.id}" style="cursor:pointer"><b>${esc(c.contact_name || c.wa_id)}</b> ${c.unread ? badge(c.unread + " nova(s)", "ok") : ""} ${badge(c.status)}
+        <div class="muted">${c.last ? esc((c.last.direction === "in" ? "Cliente: " : "Equipe: ") + c.last.preview) : ""} · ${fmtTime(c.last_message_at)}</div></div>`).join("") || `<p class="muted">Nenhuma conversa ainda. Cadastre o telefone do cliente em Cadastros → Contatos.</p>`}`; },
   diretoria: b => { const d = b.ceo; if (!d) return `<p class="muted">Sem acesso à Diretoria.</p>`; const cur = b.partner.currency;
     const fmtPrev = f => f && f.ok ? `Previsão 30 dias: ${fmtMoney(f.previsao_minor, cur)} (faixa ${fmtMoney(f.faixa_minor[0], cur)}–${fmtMoney(f.faixa_minor[1], cur)}) · ${esc(f.metodo)}` : `Previsão: ${esc(f ? f.motivo : "—")}`;
     return `<div class="card"><h4>${d.ceo ? `<span class="avatar-dot" style="background:rgb(${AGENT_RGB_SAFE(d.ceo.status).join(",")})"></span>${esc(d.ceo.name)} · ${badge(AGENT_LABEL[d.ceo.status] || d.ceo.status)}` : "CEO"}</h4>
@@ -273,6 +291,7 @@ function bindFloor(f, b) {
   body.querySelectorAll("[data-task-open]").forEach(x => x.onclick = () => openTask(x.dataset.taskOpen));
   body.querySelectorAll("[data-order]").forEach(x => x.onclick = () => openOrder(x.dataset.order));
   body.querySelectorAll("[data-agent]").forEach(x => x.onclick = () => openAgent(x.dataset.agent));
+  body.querySelectorAll("[data-conv]").forEach(x => x.onclick = () => { closePanel(); S.convSel = x.dataset.conv; S.tab = "atendimento"; setView("tabelas"); });
   body.querySelectorAll("[data-pub]").forEach(x => x.onclick = () => act(() => api(`/api/storefronts/${x.dataset.pub}`, { method: "PATCH", body: { published: x.dataset.val === "1" } }), "Página atualizada"));
   bindClosingActions(body);
   const sf = $("#sfForm"); if (sf) sf.onsubmit = async e => { e.preventDefault(); const d = new FormData(sf);
@@ -446,7 +465,8 @@ function openBase(b) {
 
 function openUnit(u) {
   openPanel({ title: esc(u.name), sub: esc(u.partner), html: `<dl class="kv"><dt>Cidade/estado</dt><dd>${esc(u.city || "—")}/${esc(u.state || "—")} · ${esc(u.country)}</dd>
-    <dt>Localização</dt><dd>${u.location_status === "confirmada" ? badge("confirmada", "ok") + " " + esc(u.location_source || "") : badge("não confirmada", "warn") + " A posição no ambiente 3D é apenas ilustrativa."}</dd></dl>` });
+    <dt>Localização</dt><dd>${u.location_status === "confirmada" ? badge("endereço confirmado", "ok") + " " + esc(u.location_source || "") : badge("endereço não confirmado", "warn")}</dd>
+    <dt>Posição no mapa</dt><dd>${u.lat != null ? `${u.lat.toFixed(4)}, ${u.lng.toFixed(4)} · ${esc(u.geo_source || "")}${(u.geo_source || "").startsWith("cidade") ? " (aproximada, centro da cidade)" : ""}` : "ainda não localizada (aguardando geocodificação)"}</dd></dl>` });
 }
 async function openWarehouse(id) {
   const w = S.world.warehouses.find(x => x.id === id); const inv = (await api("/api/inventory")).filter(i => i.warehouse === w.name);
@@ -485,11 +505,12 @@ async function openSector(code) {
 }
 
 // ------------------------------------------------------------------ modo tabelas
-const TABLE_TABS = [["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
+const TABLE_TABS = [["quadro", "Quadro de tarefas"], ["atendimento", "Atendimento"], ["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
   ["aprovacoes", "Aprovações"], ["estoque", "Estoque"], ["eventos", "Eventos"], ["webhooks", "Webhooks"], ["auditoria", "Auditoria"], ["politicas", "Políticas"]];
 async function renderTables(soft) {
   const tabs = S.me.role === "tecnico" ? [["tarefas", "Minhas tarefas"]] :
-    TABLE_TABS.filter(([k]) => (S.me.is_central && (k !== "cadastros" || can("cadastros.read"))) || ["visao", "pedidos", "tarefas", "agentes", "fechamentos", "eventos"].includes(k));
+    TABLE_TABS.filter(([k]) => (k === "atendimento" ? can("atendimento.read") : (S.me.is_central && (k !== "cadastros" || can("cadastros.read")))
+      || ["quadro", "visao", "pedidos", "tarefas", "agentes", "fechamentos", "eventos"].includes(k)));
   $("#tTabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" aria-selected="${k === S.tab}" data-t="${k}">${v}</button>`).join("");
   $("#tTabs").querySelectorAll("button").forEach(b => b.onclick = () => { S.tab = b.dataset.t; $("#tFilter").value = ""; renderTables(); });
   const body = $("#tBody"); if (!soft) body.innerHTML = `<p class="muted">Carregando…</p>`;
@@ -504,6 +525,8 @@ async function renderTables(soft) {
   };
   try {
     if (S.tab === "cadastros") return renderCadastros(body);
+    if (S.tab === "quadro") return renderKanban(body);
+    if (S.tab === "atendimento") return renderInbox(body);
     if (S.tab === "visao") grid([["name", "Parceiro"], ["region", "Região"], ["status", "Sinalização", r => st(r.status)], ["model", "Modelo"], ["overdue_tasks", "Tarefas atrasadas"],
       ["pending_closings", "Fechamentos pendentes"], ["failed_integrations", "Integrações com falha"], ["sales", "Vendas confirmadas"], ["is_demo", "Ambiente", r => r.is_demo ? badge("demo", "sim") : ""]],
       await api("/api/overview"), r => select("partner", r.id));
@@ -543,7 +566,8 @@ async function renderTables(soft) {
 const ROLE_LABEL = { admin_central: "Administrador", operacoes_central: "Operações", financeiro_central: "Financeiro",
   parceiro_admin: "Cliente (gestor)", parceiro_operador: "Cliente (operador)", tecnico: "Técnico / freelancer" };
 async function renderCadastros(body) {
-  const d = await api("/api/cadastros"); const w = can("cadastros.write");
+  const [d, chs] = await Promise.all([api("/api/cadastros"), can("atendimento.read") ? api("/api/channels").catch(() => ({ contacts: [] })) : { contacts: [] }]);
+  const w = can("cadastros.write");
   const opt = (arr, sel, lbl) => arr.map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(lbl(x))}</option>`).join("");
   const pend = d.users.filter(u => u.role === "tecnico" && !u.active);
   body.innerHTML = `
@@ -555,6 +579,7 @@ async function renderCadastros(body) {
       <td>${w ? `<button class="btn small" data-edit="base" data-id="${b.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
     ${w ? `<form class="f" data-form="base"><input type="hidden" name="id"><div class="row"><label>Nome<input name="name" required></label><label>Cidade<input name="city" required></label>
       <label>UF<input name="state" maxlength="2" value="SP" size="3"></label><label>Endereço<input name="address"></label>
+      <label>Coordenadas (opcional)<input name="coords" placeholder="-23.55, -46.63"></label>
       <label class="row"><input type="checkbox" name="location_confirmed"> endereço confirmado</label><label class="row"><input type="checkbox" name="active" checked> ativa</label>
       <button class="btn primary small">Salvar base</button></div></form>` : ""}</div>
   <div class="card"><h4>Clientes (${d.clients.length})</h4>
@@ -571,9 +596,15 @@ async function renderCadastros(body) {
       <td>${w ? `<button class="btn small" data-edit="unit" data-id="${u.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
     ${w && d.clients.length ? `<form class="f" data-form="unit"><input type="hidden" name="id"><div class="row"><label>Cliente<select name="client_id">${opt(d.clients, null, c => c.name)}</select></label>
       <label>Nome da unidade<input name="name" required></label><label>Cidade<input name="city" required></label><label>UF<input name="state" maxlength="2" value="SP" size="3"></label>
-      <label>Endereço<input name="address"></label><label>Base que atende<select name="base_id"><option value="">—</option>${opt(d.bases.filter(b => b.active), null, b => b.name)}</select></label>
+      <label>Endereço<input name="address"></label><label>Coordenadas (opcional)<input name="coords" placeholder="-23.55, -46.63"></label><label>Base que atende<select name="base_id"><option value="">—</option>${opt(d.bases.filter(b => b.active), null, b => b.name)}</select></label>
       <label class="row"><input type="checkbox" name="location_confirmed"> endereço confirmado</label><label class="row"><input type="checkbox" name="active" checked> ativa</label>
       <button class="btn primary small">Salvar unidade</button></div></form>` : w ? `<p class="muted">Cadastre um cliente primeiro.</p>` : ""}</div>
+  <div class="card"><h4>Contatos dos clientes · WhatsApp (${chs.contacts.length})</h4>
+    <p class="muted">Mensagens que chegam desses números entram direto na conversa do cliente certo.</p>
+    <table class="t"><thead><tr><th>Cliente</th><th>Nome</th><th>Telefone</th><th>Função</th></tr></thead><tbody>${chs.contacts.map(c => `<tr><td>${esc(c.partner_name)}</td><td>${esc(c.name)}</td><td class="mono">+${esc(c.phone)}</td><td>${esc(c.role || "")}</td></tr>`).join("")}</tbody></table>
+    ${w && d.clients.length ? `<form class="f" data-form="contact"><div class="row"><label>Cliente<select name="partner_id">${opt(d.clients, null, c => c.name)}</select></label>
+      <label>Nome<input name="name" required></label><label>Telefone (com DDD)<input name="phone" required placeholder="11 91234-5678"></label><label>Função<input name="role" placeholder="gestor, recepção…"></label>
+      <button class="btn primary small">Salvar contato</button></div></form>` : ""}</div>
   <div class="card"><h4>Equipe e acessos (${d.users.length})</h4>
     <table class="t"><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Vínculo</th><th>Situação</th><th></th></tr></thead><tbody>${d.users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td>
       <td>${esc(ROLE_LABEL[u.role] || u.role)}</td><td>${esc(u.partner_name || u.base_name || "central")}</td><td>${u.active ? "ativo" : badge(u.role === "tecnico" ? "aguardando autorização" : "inativo", "warn")}</td>
@@ -585,6 +616,8 @@ async function renderCadastros(body) {
       <label>Senha (mín. 10; em edição, só se for trocar)<input name="password" type="password" minlength="10" autocomplete="new-password"></label>
       <label class="row"><input type="checkbox" name="active" checked> ativo/autorizado</label><button class="btn primary small">Salvar acesso</button></div></form>` : ""}</div>`;
   const ROUTE = { base: "bases", client: "clientes", unit: "unidades", user: "usuarios" };
+  const ctf = body.querySelector("form[data-form=contact]"); if (ctf) { ctf.removeAttribute("data-form"); ctf.onsubmit = async e => { e.preventDefault(); const f = new FormData(ctf);
+    await act(() => api("/api/contacts", { method: "POST", body: { partner_id: f.get("partner_id"), name: f.get("name"), phone: f.get("phone"), role: f.get("role") } }), "Contato salvo"); renderTables(); }; }
   const SRC = { base: d.bases, client: d.clients, unit: d.units, user: d.users };
   body.querySelectorAll("form[data-form]").forEach(f => f.onsubmit = async e => {
     e.preventDefault(); const k = f.dataset.form, fd = new FormData(f), data = {};
@@ -608,6 +641,168 @@ async function renderCadastros(body) {
     renderTables(); });
 }
 
+// ------------------------------------------------------------------ país e estado no mapa real
+async function openCountry(name) {
+  const c = ((S.geo && S.geo.countries) || []).find(x => x.name === name) || {};
+  const reg = regionOfCountry(name), ps = (S.world.partners || []).filter(p => p.region_code === reg);
+  const bases = reg === "BR" ? (S.world.service_bases || []) : [], whs = (S.world.warehouses || []).filter(w => w.region_code === reg);
+  const r = (S.world.regions || []).find(x => x.code === reg);
+  const head = `${reg ? `<dl class="kv"><dt>Região operacional</dt><dd>${esc(r ? r.name : reg)} · ${r && r.sales_enabled ? badge("vendas liberadas", "ok") : badge("vendas bloqueadas", "warn")}</dd>
+      <dt>Moeda / fuso</dt><dd>${esc(r ? r.currency + " · " + r.timezone : "")}</dd></dl>` : `<p class="muted">Sem operação neste país.</p>`}
+    <h4>Clientes e parceiros (${ps.length})</h4>${ps.map(p => `<div class="card click" data-p="${p.id}" style="cursor:pointer">${st(p.status.level)} <b>${esc(p.name)}</b>
+      <div class="muted">${p.units.map(u => `${esc(u.name)} (${esc(u.city || "")}/${esc(u.state || "")})`).join(" · ")}</div></div>`).join("") || `<p class="muted">Nenhum.</p>`}
+    ${bases.length ? `<h4>Bases / filiais (${bases.length})</h4>${bases.map(b => `<div class="card click" data-b="${b.id}" style="cursor:pointer">Base · ${esc(b.name)} <span class="muted">${esc(b.city || "")}/${esc(b.state || "")}</span></div>`).join("")}` : ""}
+    ${whs.length ? `<h4>Armazéns</h4>${whs.map(w => `<div>${esc(w.name)} · ${esc(w.city || "")}</div>`).join("")}` : ""}`;
+  const render = sts => {
+    openPanel({ title: esc(c.name_pt || name), sub: badge("mapa real · Natural Earth"), html: head + `<h4>Estados / províncias</h4>${sts}`, reload: null });
+    $("#pBody").querySelectorAll("[data-p]").forEach(x => x.onclick = () => select("partner", x.dataset.p));
+    $("#pBody").querySelectorAll("[data-b]").forEach(x => x.onclick = () => select("base", x.dataset.b, { data: S.world.service_bases.find(b => b.id === x.dataset.b) }));
+    $("#pBody").querySelectorAll("[data-st]").forEach(x => x.onclick = () => { const s = S.w.states.states.find(z => z.name === x.dataset.st); select("state", s.name, { data: s, country: name }); });
+  };
+  render(`<p class="muted">Carregando…</p>`);
+  const load = async () => {
+    const d = await api(`/api/geo/states?country=${encodeURIComponent(name)}`).catch(() => null);
+    if (!S.panel) return;
+    if (!d || d.status !== "pronto") { render(`<p class="muted">${d && d.status === "erro" ? "Falha ao baixar estados: " + esc(d.error || "") : "Baixando o mapa de estados de todos os países (uma única vez, ~40 MB)…"}</p>`);
+      if (!d || d.status !== "erro") setTimeout(load, 5000); return; }
+    S.w && S.w.setStates(d);
+    const units = ps.flatMap(p => p.units.map(u => ({ ...u, partner: p.name })));
+    render(d.states.length ? `<div class="row" style="flex-wrap:wrap;gap:4px">${d.states.slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map(s => {
+      const n = units.filter(u => (u.state || "").toUpperCase() === (s.code || "").toUpperCase()).length;
+      return `<button class="btn small" data-st="${esc(s.name)}">${esc(s.name)}${n ? ` · ${n}` : ""}</button>`; }).join("")}</div>` : `<p class="muted">Sem subdivisões no mapa para este país.</p>`);
+  };
+  load();
+}
+function openState(s, country) {
+  if (!s) return;
+  const reg = regionOfCountry(country), code = (s.code || "").toUpperCase();
+  const ps = (S.world.partners || []).filter(p => p.region_code === reg);
+  const units = ps.flatMap(p => p.units.filter(u => (u.state || "").toUpperCase() === code).map(u => ({ ...u, partner: p })));
+  const bases = (S.world.service_bases || []).filter(b => (b.state || "").toUpperCase() === code && reg === "BR");
+  openPanel({ title: esc(s.name), sub: `${esc(countryName(country))} ${s.type ? "· " + esc(s.type) : ""}`, html: `
+    <h4>Unidades de clientes (${units.length})</h4>${units.map(u => `<div class="card click" data-p="${u.partner.id}" style="cursor:pointer">${st(u.partner.status.level)} <b>${esc(u.partner.name)}</b> · ${esc(u.name)} <span class="muted">${esc(u.city || "")}</span></div>`).join("") || `<p class="muted">Nenhuma.</p>`}
+    <h4>Bases (${bases.length})</h4>${bases.map(b => `<div>Base · ${esc(b.name)} <span class="muted">${esc(b.city || "")}</span></div>`).join("") || `<p class="muted">Nenhuma.</p>`}` });
+  $("#pBody").querySelectorAll("[data-p]").forEach(x => x.onclick = () => select("partner", x.dataset.p));
+}
+
+// ------------------------------------------------------------------ central de comandos
+function openCommands() {
+  openPanel({ title: "⌘ Central de comandos", sub: "Escreva em português. Nada é executado sem a sua confirmação.", html: `
+    <form class="f" id="cmdForm"><input id="cmdIn" name="text" autocomplete="off" placeholder="ex.: chamado Clínica Vida unidade Matriz: impressora não imprime" style="font-size:15px">
+      <button class="btn primary">Interpretar</button></form>
+    <div id="cmdRes" class="cmdres"></div>
+    <details class="card" open><summary>Exemplos</summary><ul>${["chamado <cliente> unidade <unidade> responsável <pessoa> prazo amanhã: <descrição>",
+      "preventiva <cliente> unidade <unidade> prazo 15/12", "tarefa <cliente>: <o que fazer> prazo em 3 dias", "rodar agente pesquisa", "rodar ceo <cliente>",
+      "ideia <cliente>: <ideia para o CEO>", "fechamento <cliente> 11/2026", "whatsapp <cliente>: <mensagem>", "abrir Brasil", "pausar agentes"]
+      .map(x => `<li><a href="#" data-ex="${esc(x)}">${esc(x)}</a></li>`).join("")}</ul></details>
+    <h4>Histórico desta sessão</h4><div id="cmdHist">${(S.cmdHist || []).map(h => `<div class="muted">${esc(h)}</div>`).join("") || `<p class="muted">Vazio.</p>`}</div>` });
+  const inp = $("#cmdIn"); inp.focus();
+  $("#pBody").querySelectorAll("[data-ex]").forEach(a => a.onclick = e => { e.preventDefault(); inp.value = a.dataset.ex; inp.focus(); });
+  $("#cmdForm").onsubmit = async e => {
+    e.preventDefault(); const text = inp.value.trim(); if (!text) return; const out = $("#cmdRes");
+    out.innerHTML = `<p class="muted">Interpretando…</p>`;
+    try {
+      const p = await api("/api/commands/parse", { method: "POST", body: { text } });
+      if (!p.requires_confirmation) { S.cmdHist = [`✓ ${p.summary}`, ...(S.cmdHist || [])].slice(0, 20); return runOpen(p.args.query); }
+      out.innerHTML = `<div class="card"><h4>${esc(p.summary)}</h4><div class="muted">${p.source === "ia" ? "Interpretado pela IA grátis — confira antes de confirmar." : "Interpretado por regra."}</div>
+        <div class="row" style="margin-top:6px"><button class="btn primary small" id="cmdOk">Confirmar e executar</button><button class="btn small" id="cmdNo">Cancelar</button></div></div>`;
+      $("#cmdNo").onclick = () => (out.innerHTML = "");
+      $("#cmdOk").onclick = async () => {
+        $("#cmdOk").disabled = true;
+        try { const r = await api("/api/commands/execute", { method: "POST", body: { action: p.action, args: p.args } });
+          S.cmdHist = [`✓ ${p.summary}`, ...(S.cmdHist || [])].slice(0, 20); toast("Executado: " + p.summary);
+          out.innerHTML = `<div class="card"><b>Feito.</b> ${r.result.task_id ? `<a href="#" id="cmdTask">Abrir tarefa</a>` : esc(JSON.stringify(r.result))}</div>`;
+          const t = $("#cmdTask"); if (t) t.onclick = ev => { ev.preventDefault(); openTask(r.result.task_id); };
+          inp.value = ""; refresh(); }
+        catch (er) { S.cmdHist = [`✗ ${p.summary}: ${er.message}`, ...(S.cmdHist || [])].slice(0, 20); out.innerHTML = `<div class="card" style="border-color:#7f1d1d">${esc(er.message)}</div>`; }
+      };
+    } catch (er) { out.innerHTML = `<div class="card" style="border-color:#7f1d1d">${esc(er.message)}</div>`; }
+  };
+}
+function runOpen(q) {
+  const t = q.toLowerCase(); setView("3d");
+  const p = (S.world.partners || []).find(x => x.name.toLowerCase().includes(t)); if (p) return select("partner", p.id);
+  const c = ((S.geo && S.geo.countries) || []).find(x => x.name_pt.toLowerCase() === t || x.name.toLowerCase() === t); if (c) return select("country", c.name, {});
+  const b = (S.world.service_bases || []).find(x => x.name.toLowerCase().includes(t)); if (b) return select("base", b.id, { data: b });
+  toast(`Não encontrei “${q}”`, true);
+}
+
+// ------------------------------------------------------------------ quadro de tarefas (arrastar entre colunas)
+async function renderKanban(body) {
+  const tasks = await api("/api/tasks"); const q = ($("#tFilter").value || "").toLowerCase();
+  const cols = ["a_fazer", "em_andamento", "aguardando_terceiro", "aguardando_aprovacao", "concluida", "cancelada"];
+  const partners = Object.fromEntries((S.world.partners || []).map(p => [p.id, p.name]));
+  const list = tasks.filter(t => !q || (t.title + " " + (t.assignee_name || "") + " " + (partners[t.partner_id] || "")).toLowerCase().includes(q));
+  body.innerHTML = `<div class="row" style="padding-top:10px">${can("comandos.run") ? `<button class="btn small primary" id="kNew">+ Nova tarefa por comando</button>` : ""}
+    <span class="muted">Arraste os cartões entre as colunas para mudar o status. Regras (checklist, dependências, aprovação) continuam valendo.</span></div>
+    <div class="kanban">${cols.map(c => `<div class="kcol" data-col="${c}"><h4>${esc(TASK_STATES[c])} · ${list.filter(t => t.status === c).length}</h4>
+      ${list.filter(t => t.status === c).slice(0, 60).map(t => `<div class="kcard" draggable="${can("tasks.write")}" data-id="${t.id}">
+        <b>${esc(t.title)}</b>${t.overdue ? badge("atrasada", "bad") + " " : ""}${badge(t.priority)}
+        <div class="muted">${esc(partners[t.partner_id] || "central")} · ${esc(t.assignee_name || "sem responsável")}${t.due_at ? " · " + fmtTime(t.due_at) : ""}</div></div>`).join("")}</div>`).join("")}</div>`;
+  const kn = $("#kNew"); if (kn) kn.onclick = openCommands;
+  body.querySelectorAll(".kcard").forEach(card => {
+    card.onclick = () => openTask(card.dataset.id);
+    card.ondragstart = e => { e.dataTransfer.setData("text/plain", card.dataset.id); };
+  });
+  body.querySelectorAll(".kcol").forEach(col => {
+    col.ondragover = e => { e.preventDefault(); col.classList.add("over"); };
+    col.ondragleave = () => col.classList.remove("over");
+    col.ondrop = async e => { e.preventDefault(); col.classList.remove("over"); const id = e.dataTransfer.getData("text/plain");
+      try { await api(`/api/tasks/${id}`, { method: "PATCH", body: { status: col.dataset.col } }); toast("Status atualizado"); }
+      catch (er) { toast(er.message, true); } renderKanban(body); };
+  });
+}
+
+// ------------------------------------------------------------------ atendimento (WhatsApp + canais internos)
+async function updateUnread() {
+  try { const cs = await api("/api/conversations"); const n = cs.reduce((a, c) => a + (c.unread || 0), 0);
+    const el = $("#unread"); el.textContent = n; el.classList.toggle("hidden", !n); el.classList.toggle("ok", !!n); } catch {}
+}
+async function renderInbox(body) {
+  const [ov, convs] = await Promise.all([api("/api/channels"), api("/api/conversations")]);
+  const sel = S.convSel && convs.find(c => c.id === S.convSel) ? S.convSel : (convs[0] && convs[0].id);
+  const wa = ov.whatsapp;
+  body.innerHTML = `<div class="card" style="margin-top:10px"><b>WhatsApp Business</b> ${wa.configured ? badge("conectado à API oficial", "ok")
+      : wa.demo_simulation ? badge("demonstração: envio simulado", "sim") : badge("não configurado", "warn")}
+    ${wa.configured ? "" : `<span class="muted"> Faltam no config.local.env: ${wa.missing.map(esc).join(", ")}. Webhook: <span class="mono">${esc(wa.webhook_path)}</span> (ver docs).</span>`}
+    ${wa.demo_simulation && can("atendimento.send") ? `<form class="row" id="simForm" style="margin-top:6px"><input name="phone" placeholder="telefone do cliente" class="btn" style="width:160px">
+      <input name="text" placeholder="mensagem que o cliente mandaria" class="btn" style="flex:1"><button class="btn small">Simular mensagem recebida</button></form>` : ""}
+    ${can("cadastros.write") ? `<form class="row" id="chForm" style="margin-top:6px"><input name="name" placeholder="novo canal interno (ex.: Equipe Base Centro)" class="btn" style="flex:1"><button class="btn small">Criar canal interno</button></form>` : ""}</div>
+  <div class="inbox"><div class="list">${convs.map(c => `<button data-c="${c.id}" aria-current="${c.id === sel}">
+      <b>${c.channel_kind === "interno" ? "# " : ""}${esc(c.contact_name || c.wa_id || "")}</b> ${c.unread ? badge(c.unread, "ok") : ""}${c.wa_id ? `<span class="muted mono"> +${esc(c.wa_id)}</span>` : ""}
+      <div class="muted">${esc(c.partner_name || (c.channel_kind === "interno" ? "canal interno" : "cliente não identificado"))} · ${esc(c.status)}${c.channel_kind === "whatsapp" ? (c.window_open ? " · janela aberta" : " · fora da janela 24h") : ""}</div>
+      <div class="muted">${c.last ? esc(c.last.preview) : ""}</div></button>`).join("") || `<p class="muted" style="padding:10px">Nenhuma conversa.</p>`}</div>
+    <div class="chat" id="chat"><p class="muted" style="padding:12px">Selecione uma conversa.</p></div></div>`;
+  body.querySelectorAll("[data-c]").forEach(b => b.onclick = () => { S.convSel = b.dataset.c; renderInbox(body); });
+  const sf = $("#simForm"); if (sf) sf.onsubmit = async e => { e.preventDefault(); const f = new FormData(sf);
+    await act(() => api("/api/demo/whatsapp-inbound", { method: "POST", body: { phone: f.get("phone"), text: f.get("text") } }), "Mensagem simulada recebida"); };
+  const cf = $("#chForm"); if (cf) cf.onsubmit = async e => { e.preventDefault(); await act(() => api("/api/channels", { method: "POST", body: { name: new FormData(cf).get("name") } }), "Canal criado"); renderInbox(body); };
+  if (sel) renderChat(sel);
+}
+async function renderChat(id) {
+  const c = await api(`/api/conversations/${id}`); const box = $("#chat"); if (!box) return;
+  const isWa = c.channel_kind === "whatsapp", send = can("atendimento.send");
+  box.innerHTML = `<div style="padding:8px 12px;border-bottom:1px solid var(--line)"><b>${esc(c.contact_name || c.wa_id || c.channel_name)}</b>
+      <span class="muted">${esc(c.partner_name || "")}${isWa ? ` · ${c.window_open ? "janela de 24h aberta até " + fmtTime(c.window_closes_at) : "fora da janela de 24h (só modelo aprovado)"}` : " · canal interno"}</span>
+      ${send && isWa ? `<div class="row" style="margin-top:6px">
+        ${!c.partner_id && can("cadastros.write") ? `<select id="lnkP" class="btn small">${(S.world.partners || []).map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select><button class="btn small" id="lnk">Vincular ao cliente</button>` : ""}
+        ${c.partner_id ? `<select id="tkU" class="btn small"><option value="">unidade…</option>${c.units.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select><button class="btn small" id="tk">Abrir chamado</button>` : ""}
+        <button class="btn small" id="sug">Sugerir resposta (IA grátis)</button>
+        <button class="btn small" id="cls">${c.status === "encerrada" ? "Reabrir" : "Encerrar"}</button></div>` : ""}</div>
+    <div class="msgs" id="msgs">${c.messages.map(m => `<div class="bubble ${m.direction}">${esc(m.body)}<small>${esc(m.author || "")} · ${fmtTime(m.created_at)}${m.direction === "out" ? " · " + esc(m.status) : ""}${m.is_simulated ? " · simulado" : ""}${m.error ? " · " + esc(m.error) : ""}</small></div>`).join("")}</div>
+    ${send ? `<form id="sendForm"><textarea name="text" placeholder="${isWa && !c.window_open ? "Fora da janela de 24h: aguarde o cliente escrever ou use um modelo aprovado" : "Escreva a resposta…"}" ${isWa && !c.window_open ? "disabled" : ""}></textarea>
+      <button class="btn primary" ${isWa && !c.window_open ? "disabled" : ""}>Enviar</button></form>` : `<p class="muted" style="padding:8px">Somente leitura.</p>`}`;
+  const m = $("#msgs"); m.scrollTop = m.scrollHeight;
+  const f = $("#sendForm"); if (f) f.onsubmit = async e => { e.preventDefault(); const t = f.text.value.trim(); if (!t) return;
+    await act(() => api(`/api/conversations/${id}/send`, { method: "POST", body: { text: t } }), "Mensagem enviada"); updateUnread(); renderChat(id); };
+  const sug = $("#sug"); if (sug) sug.onclick = async () => { sug.disabled = true; sug.textContent = "Pensando…";
+    try { const r = await api(`/api/conversations/${id}/suggest`, { method: "POST" }); f.text.value = r.draft; toast("Rascunho pronto: revise antes de enviar"); }
+    catch (er) { toast(er.message, true); } sug.disabled = false; sug.textContent = "Sugerir resposta (IA grátis)"; };
+  const tk = $("#tk"); if (tk) tk.onclick = async () => { const r = await act(() => api(`/api/conversations/${id}/ticket`, { method: "POST", body: { unit_id: $("#tkU").value } }), "Chamado aberto"); renderChat(id); openTask(r.task_id); };
+  const lnk = $("#lnk"); if (lnk) lnk.onclick = async () => { await act(() => api(`/api/conversations/${id}/link`, { method: "POST", body: { partner_id: $("#lnkP").value } }), "Conversa vinculada e contato cadastrado"); renderChat(id); };
+  const cls = $("#cls"); if (cls) cls.onclick = async () => { await act(() => api(`/api/conversations/${id}/status`, { method: "POST", body: { status: c.status === "encerrada" ? "aberta" : "encerrada" } })); renderChat(id); };
+}
+
 // ------------------------------------------------------------------ busca e filtros
 function setupSearch() {
   const inp = $("#q"), res = $("#qres"); let timer;
@@ -615,7 +810,8 @@ function setupSearch() {
   inp.oninput = () => { clearTimeout(timer); timer = setTimeout(async () => {
     const q = inp.value.trim().toLowerCase(); if (!q) { res.classList.add("hidden"); return; }
     const items = [];
-    for (const r of S.world.regions) if (r.name.toLowerCase().includes(q)) items.push(["region", r.code, `País · ${r.name}`]);
+    for (const c of (S.geo && S.geo.countries) || []) if ((c.name_pt + " " + c.name).toLowerCase().includes(q)) items.push(["country", c.name, `País · ${c.name_pt}`, c]);
+    for (const st of (S.w && S.w.states ? S.w.states.states : [])) if (st.name.toLowerCase().includes(q)) items.push(["state", st.name, `Estado · ${st.name}`, st, S.w.states.country]);
     for (const p of S.world.partners) { if (p.name.toLowerCase().includes(q)) items.push(["partner", p.id, `Parceiro · ${p.name} · ${statusText(p.status.level)}`]);
       for (const u of p.units) if ((u.name + " " + (u.city || "") + " " + (u.state || "")).toLowerCase().includes(q)) items.push(["unit", u.id, `Unidade · ${u.name} (${u.city}/${u.state})`, { ...u, partner: p.name }]); }
     for (const a of S.world.agents) if ((a.name + a.role).toLowerCase().includes(q)) items.push(["agent", a.id, `Agente · ${a.name}`]);
@@ -625,7 +821,7 @@ function setupSearch() {
     res.innerHTML = items.slice(0, 14).map((it, i) => `<button data-i="${i}">${esc(it[2])}</button>`).join("") || `<div class="muted" style="padding:8px 12px">Nada encontrado</div>`;
     res.classList.remove("hidden");
     res.querySelectorAll("button").forEach(b => b.onclick = () => { const it = items[+b.dataset.i]; res.classList.add("hidden"); inp.value = "";
-      if (S.view !== "3d" && !["order", "task"].includes(it[0])) setView("3d"); select(it[0], it[1], { data: it[3] }); });
+      if (S.view !== "3d" && !["order", "task"].includes(it[0])) setView("3d"); select(it[0], it[1], { data: it[3], country: it[4] }); });
   }, 200); };
   document.addEventListener("click", e => { if (!$("#search").contains(e.target)) res.classList.add("hidden"); });
 }

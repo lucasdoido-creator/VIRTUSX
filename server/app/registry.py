@@ -29,6 +29,21 @@ def _uf(v):
     return v or None
 
 
+def _coords(data, city, state, country="BR"):
+    """Coordenadas: informadas manualmente (lat, lng) ou pela cidade (aproximada). None = o agendador tenta depois."""
+    raw = (data.get("coords") or "").strip()
+    if raw:
+        try:
+            lat, lng = [float(x) for x in raw.replace(";", ",").split(",")[:2]]
+            assert -90 <= lat <= 90 and -180 <= lng <= 180
+            return lat, lng, "informada manualmente"
+        except Exception:
+            raise AppError("Coordenadas inválidas: use o formato -23.55, -46.63", "coordenadas_invalidas")
+    from .geo import _gaz
+    hit = _gaz(city, state)
+    return (*hit, "cidade (tabela embutida)") if hit else (None, None, None)
+
+
 def _money(v):
     if v in (None, ""):
         return None
@@ -64,14 +79,16 @@ def save_base(actor: Principal, data, base_id=None):
             before = c.execute("SELECT * FROM service_bases WHERE id=?", (base_id,)).fetchone()
             if not before:
                 raise NotFound("Base não encontrada")
-            c.execute("UPDATE service_bases SET name=?,city=?,state=?,address=?,location_status=?,active=? WHERE id=?",
-                      (row["name"], row["city"], row["state"], row["address"], row["location_status"], row["active"], base_id))
+            lat, lng, src = _coords(data, row["city"], row["state"])
+            c.execute("UPDATE service_bases SET name=?,city=?,state=?,address=?,location_status=?,active=?,lat=?,lng=?,geo_source=? WHERE id=?",
+                      (row["name"], row["city"], row["state"], row["address"], row["location_status"], row["active"], lat, lng, src, base_id))
             audit(c, actor, "base.alterada", "service_base", base_id, dict(before), row)
         else:
             base_id = new_id("bas")
-            c.execute("INSERT INTO service_bases(id,name,city,state,address,location_status,active,created_at,is_demo) VALUES (?,?,?,?,?,?,?,?,?)",
+            lat, lng, src = _coords(data, row["city"], row["state"])
+            c.execute("INSERT INTO service_bases(id,name,city,state,address,location_status,active,created_at,is_demo,lat,lng,geo_source) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                       (base_id, row["name"], row["city"], row["state"], row["address"], row["location_status"], row["active"], iso(),
-                       1 if R.settings.is_demo else 0))
+                       1 if R.settings.is_demo else 0, lat, lng, src))
             audit(c, actor, "base.criada", "service_base", base_id, None, row)
         emit(c, "cadastro.base", "cadastros", "service_base", base_id, status="ativa" if row["active"] else "inativa", payload={"name": row["name"]})
     return base_id
@@ -131,19 +148,22 @@ def save_unit(actor: Principal, data, unit_id=None):
             if not before:
                 raise NotFound("Unidade não encontrada")
             pid = before["partner_id"]
-            c.execute("UPDATE partner_units SET name=?,city=?,state=?,address=?,base_id=?,active=?,location_status=?,location_source=? WHERE id=?",
+            lat, lng, src = _coords(data, row["city"], row["state"])
+            c.execute("UPDATE partner_units SET name=?,city=?,state=?,address=?,base_id=?,active=?,location_status=?,location_source=?,lat=?,lng=?,geo_source=? WHERE id=?",
                       (row["name"], row["city"], row["state"], row["address"], row["base_id"], row["active"],
-                       "confirmada" if confirmed else "nao_confirmada", f"Endereço confirmado por {actor.name or actor.id}" if confirmed else None, unit_id))
+                       "confirmada" if confirmed else "nao_confirmada", f"Endereço confirmado por {actor.name or actor.id}" if confirmed else None,
+                       lat, lng, src, unit_id))
             audit(c, actor, "unidade.alterada", "unit", unit_id, dict(before), row, pid)
         else:
             if not c.execute("SELECT 1 FROM partners WHERE id=? AND commercial_model='cliente_servico'", (pid,)).fetchone():
                 raise NotFound("Cliente não encontrado")
             unit_id = new_id("uni")
-            c.execute("INSERT INTO partner_units(id,partner_id,name,country,state,city,address,location_status,location_source,base_id,active,is_demo)"
-                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            lat, lng, src = _coords(data, row["city"], row["state"])
+            c.execute("INSERT INTO partner_units(id,partner_id,name,country,state,city,address,location_status,location_source,base_id,active,is_demo,lat,lng,geo_source)"
+                      " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (unit_id, pid, row["name"], "BR", row["state"], row["city"], row["address"], "confirmada" if confirmed else "nao_confirmada",
                        f"Endereço confirmado por {actor.name or actor.id}" if confirmed else None, row["base_id"], row["active"],
-                       1 if R.settings.is_demo else 0))
+                       1 if R.settings.is_demo else 0, lat, lng, src))
             audit(c, actor, "unidade.criada", "unit", unit_id, None, row, pid)
         emit(c, "cadastro.unidade", "cadastros", "unit", unit_id, pid, "BR", status="ativa" if row["active"] else "inativa",
              payload={"name": row["name"], "city": row["city"]})

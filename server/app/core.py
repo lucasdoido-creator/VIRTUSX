@@ -101,21 +101,21 @@ def scrub(text: str) -> str:
 ROLE_PERMS = {
     "admin_central": {"*"},
     "operacoes_central": {
-        "ventures.read", "cadastros.read",
+        "ventures.read", "cadastros.read", "atendimento.read", "atendimento.send", "comandos.run",
         "orders.read", "orders.read_pii", "orders.cancel", "shipments.create", "inventory.read",
         "partners.read", "tasks.read", "tasks.write", "agents.read", "agents.run", "events.read",
         "closings.read", "apps.read", "storefronts.read", "returns.create", "audit.read",
         "approvals.read", "world.read", "catalog.read",
     },
     "financeiro_central": {
-        "cadastros.read",
+        "cadastros.read", "atendimento.read", "comandos.run",
         "orders.read", "orders.read_pii", "partners.read", "commissions.read", "closings.read",
         "closings.prepare", "closings.review", "closings.approve", "closings.close", "closings.reopen",
         "closings.settle", "approvals.read", "approvals.decide", "tasks.read", "tasks.write", "events.read",
         "agents.read", "apps.read", "audit.read", "world.read", "inventory.read", "catalog.read",
     },
     "parceiro_admin": {
-        "ventures.read", "ventures.write", "agents.run.ceo",
+        "ventures.read", "ventures.write", "agents.run.ceo", "atendimento.read", "comandos.run",
         "orders.read", "storefronts.read", "storefronts.write", "tasks.read", "tasks.write",
         "closings.read", "closings.review", "commissions.read", "apps.read", "partners.read",
         "events.read", "agents.read", "world.read", "catalog.read", "inventory.read",

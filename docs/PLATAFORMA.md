@@ -170,6 +170,31 @@ Ambiente separado (`iniciar-producao.bat`, porta **8001**, faixa vermelha **PROD
 
 Próximo passo do modelo de negócio: **parceiros com mensalidade** (cobrança recorrente) — depende da escolha do meio de cobrança.
 
+## 7.3 Mapa-múndi real, central de comandos e atendimento por WhatsApp
+
+**Mapa real.** Contornos de todos os países (Natural Earth 1:50m, via `world-atlas`) e, ao abrir um país, de todos os seus estados/províncias (Natural Earth 1:10m admin-1). Baixados **uma vez** pelo servidor e guardados em `data/geo/` (depois funciona sem internet). Sem download, o mapa mostra o aviso e o restante segue funcionando. Clique num país → painel com estados e operações; clique num estado → unidades, bases e técnicos ali. Unidades são posicionadas pela cidade (marcadas **aproximadas**) ou pelas coordenadas que você digitar no cadastro (**confirmadas**). Cidades fora da lista interna são geolocalizadas pelo OpenStreetMap/Nominatim (1 consulta/s, com cache). Nada é apresentado como rastreamento ao vivo.
+
+**Central de comandos** (`Ctrl+K` ou botão *Comandos*). Exemplos:
+- `chamado Casa Aurora unidade Loja Pinheiros prazo amanhã: impressora sem rede`
+- `preventiva Clínica Vida prazo 15/12`, `tarefa revisar contrato prazo sexta`
+- `ideia <cliente>: <ideia para o CEO de IA>`, `rodar agente pesquisa`, `rodar ceo <cliente>`, `fechamento <cliente> 11/2026`, `whatsapp <cliente>: <mensagem>`, `pausar agentes` / `retomar agentes`, `abrir Brasil`
+O texto é interpretado por regras fixas (sem custo); se não reconhecer, a IA local tenta reescrever no formato conhecido. Sempre mostra uma **prévia** antes de executar; só ações da lista permitida, sempre com as permissões de quem digitou.
+
+**Quadro de tarefas** (*Tabelas → Quadro de tarefas*): colunas a fazer / em andamento / bloqueada / concluída; arrastar muda o status (as regras de checklist e evidência continuam valendo).
+
+**Atendimento** (botão *Atendimento*, contador de não lidas): conversas do WhatsApp e canais internos. Em cada conversa: vincular ao cliente/unidade, responder, **sugerir resposta** (IA grátis local; vira rascunho, nunca é enviada sozinha), **abrir chamado** (tarefa com checklist de chamado) e encerrar. Mensagens de clientes são tratadas como dados, nunca como instruções.
+
+### WhatsApp: o que você precisa fazer (uma vez)
+No demo, há um botão para **simular** mensagens recebidas; respostas aparecem como "simulado". Em produção, sem credenciais, o envio fica **integração pendente** (nada é fingido). Para ligar o real:
+1. Em developers.facebook.com crie um app tipo *Business* e adicione o produto **WhatsApp**; vincule sua conta WhatsApp Business (WABA) e um número.
+2. Copie o **Phone number ID** e gere um **token permanente** (usuário do sistema no Business Manager com permissão `whatsapp_business_messaging`). Em *Configurações do app → Básico* copie a **Chave secreta do app**.
+3. Preencha `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET` e invente um `WHATSAPP_VERIFY_TOKEN` no `config.local.env`; reinicie.
+4. A Meta exige endereço **HTTPS público**. Grátis: `cloudflared tunnel --url http://127.0.0.1:8001` gera um endereço `https://….trycloudflare.com` (para endereço fixo, use um túnel nomeado com domínio próprio).
+5. No painel do WhatsApp → *Configuração → Webhook*: URL `https://<seu-endereço>/api/webhooks/whatsapp`, token de verificação = o que você inventou; assine o campo **messages**.
+6. Teste mandando uma mensagem para o número: ela aparece em *Atendimento*. Toda mensagem recebida tem a assinatura `X-Hub-Signature-256` conferida; sem assinatura válida é rejeitada.
+
+Regras da Meta respeitadas: respostas livres só até **24 h** após a última mensagem do cliente; fora disso exige *modelo aprovado* (ainda **não implementado** — o sistema bloqueia e avisa). A Meta cobra por conversas iniciadas pela empresa; respostas dentro da janela de atendimento costumam ser gratuitas — confira a tabela vigente da Meta.
+
 ## 8. Como executar e acessar
 
 **Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
@@ -189,7 +214,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **58 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`), sem rede e sem gasto,, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **75 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.
@@ -206,9 +231,11 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 - Agentes: tarefa atribuída executada com evidência, compras preparadas sem política, pausa global, IA ausente → aguardando integração, texto de fornecedor tratado como dado, política proibida bloqueia agente.
 - Sinalização: sem dados = cinza; falha de integração = amarelo; dados velhos = cinza.
 - CEO: plano-modelo sem IA; plano por IA local validado (agente inexistente e instrução injetada descartados); Claude respeita o teto mensal; dependências respeitadas pelos agentes; Conteúdo sem IA fica *aguardando integração*; briefing uma vez por dia; isolamento entre parceiros; previsão determinística; cache de notícias.
+- Mapa: decodificação do TopoJSON, recorte de estados por país, geolocalização com cache e posição aproximada × confirmada.
+- Comandos: interpretação, prévia, permissões e lista de ações permitidas. WhatsApp: verificação do webhook, assinatura inválida rejeitada, mensagem duplicada ignorada, janela de 24 h, produção sem credenciais = integração pendente, isolamento por parceiro.
 - Fusos embutidos idênticos à base oficial a cada 3 h de 2025 a 2027, incluindo viradas de horário de verão.
 
-Testes de navegador: `scripts/e2e_producao.mjs` (produção limpa: primeiro acesso, cadastros pela tela, freelancer autorizado, chamado com checklist concluído pelo celular com evidência, bases no 3D) e (`scripts/e2e.mjs`, Playwright/Chromium com WebGL por software): login, cidade 3D, prédio do parceiro brasileiro, criação de página pela interface, compra na loja com pagamento de teste, envio + comissão refletidos ao vivo, **queda e reinício do servidor** com pedido criado durante a desconexão e recebido após a reconexão, tabelas, visão móvel em modo leve, isolamento. Resultado: **E2E OK**.
+Testes de navegador: `scripts/e2e_producao.mjs` (produção limpa: primeiro acesso, cadastros pela tela, freelancer autorizado, chamado com checklist concluído pelo celular com evidência, bases no 3D) e (`scripts/e2e.mjs`, Playwright/Chromium com WebGL por software): login, cidade 3D, prédio do parceiro brasileiro, criação de página pela interface, compra na loja com pagamento de teste, envio + comissão refletidos ao vivo, **queda e reinício do servidor** com pedido criado durante a desconexão e recebido após a reconexão, tabelas, visão móvel em modo leve, isolamento. Resultado: **E2E OK**. `scripts/e2e_mapa_canais.mjs`: mapa-múndi → Brasil → estados → São Paulo com unidades, comando criando chamado, arrastar no quadro, WhatsApp simulado → vincular cliente → responder → abrir chamado (no CI baixa o mapa real).
 
 ## 9.1 Automação contínua (GitHub)
 
@@ -227,7 +254,7 @@ Tudo no ambiente demo: parceiros, unidades, produtos, estoques, endereços, paga
 - SQLite com um processo; o tempo real lê a tabela de eventos a cada 1 s (latência ~1 s).
 - 3D em WebGL próprio: sem sombras/modelos detalhados; acessibilidade por teclado no canvas limitada (o conteúdo completo está nas tabelas e no painel lateral).
 - Avatares mudam de estado só quando há execução; rotinas determinísticas são rápidas, então "executando" raramente aparece por mais de um instante (comportamento real, não encenado).
-- Atendimento ao cliente, metas comerciais e emissão fiscal não implementados.
+- WhatsApp: modelos de mensagem (fora da janela de 24 h) e mídia (fotos/áudios recebidos aparecem só como aviso) não implementados. Metas comerciais e emissão fiscal não implementados.
 - Impostos não calculados (D11). Comissão segue D6 até decisão comercial.
 - Anexos gravados em disco local (`data/anexos_<env>`); produção requer armazenamento de objetos com antivírus.
 - Sem 2FA, sem recuperação de senha, sem gestão de usuários pela interface.

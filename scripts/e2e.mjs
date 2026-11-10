@@ -17,6 +17,9 @@ const api = (page, path, method = "GET", body) => page.evaluate(async ([path, me
   const r = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Requested-With": "plataforma" }, body: body ? JSON.stringify(body) : undefined });
   return r.json(); }, [path, method, body]);
 
+// Abre o prédio de um parceiro pela busca (no mapa-múndi os prédios só aparecem de perto)
+const openPartner = async (page, name) => { await page.fill("#q", name); await page.click(`#qres button:has-text('Parceiro · ${name}')`); };
+
 // 1. Central: visão global 3D
 const A = await ctxPage("admin@central.demo"); await A.page.waitForTimeout(2500);
 const ceoLabels = await A.page.$$eval(".lbl.ceo", els => els.length); log("rótulos de CEO no mundo:", ceoLabels);
@@ -27,7 +30,7 @@ log("rótulos visíveis:", labels.length, labels.slice(0, 6).join(" | "));
 
 // 2. Parceiro brasileiro cria a página pelo prédio (UI)
 const M = await ctxPage("marina@aurora.demo");
-await M.page.click(".lbl:has-text('Casa Aurora')"); await M.page.waitForSelector("#panel:not(.hidden) #pTitle:has-text('Casa Aurora')");
+await openPartner(M.page, "Casa Aurora"); await M.page.waitForSelector("#panel:not(.hidden) #pTitle:has-text('Casa Aurora')");
 await M.page.waitForTimeout(1500); await M.page.screenshot({ path: `${OUT}/02_predio_parceiro.png` });
 await M.page.click("#pTabs button:has-text('Comercial')"); await M.page.waitForSelector("#sfForm");
 await M.page.fill("#sfForm [name=slug]", "casa-aurora"); await M.page.fill("#sfForm [name=headline]", "Feito com calma, em São Paulo");
@@ -61,7 +64,7 @@ const orders = (await api(A.page, "/api/orders")).data; const o = orders.find(x 
 const ship = await api(A.page, `/api/orders/${o.id}/ship`, "POST"); log("envio:", ship.data.tracking_code, "comissão:", ship.data.commission.amount_minor);
 await A.page.waitForFunction(() => document.querySelector("#ticker").textContent.includes("comissao.apurada"), null, { timeout: 10000 });
 log("centro recebeu comissao.apurada em tempo real");
-await A.page.click(".lbl:has-text('Casa Aurora')"); await A.page.waitForTimeout(1800);
+await openPartner(A.page, "Casa Aurora"); await A.page.waitForTimeout(1800);
 await A.page.click("#pTabs button:has-text('Financeiro')"); await A.page.waitForTimeout(500);
 await A.page.screenshot({ path: `${OUT}/05_predio_financeiro.png` });
 
