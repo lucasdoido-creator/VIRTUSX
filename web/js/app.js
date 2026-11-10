@@ -195,6 +195,8 @@ function editing(sel) {
   const box = $(sel); if (!box) return false;
   const a = document.activeElement;
   if (a && box.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== "checkbox") return true;
+  if (box.querySelector("details[open] form")) return true;   // formulário aberto pela pessoa (ex.: "Nova tarefa")
+  if ([...box.querySelectorAll("form select")].some(sel => { const d = [...sel.options].find(o => o.defaultSelected) || sel.options[0]; return d && sel.value !== d.value; })) return true;
   return [...box.querySelectorAll("form input, form textarea")].some(i => !["checkbox", "hidden", "file", "radio"].includes(i.type) && i.value !== i.defaultValue);
 }
 
