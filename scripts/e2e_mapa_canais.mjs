@@ -54,6 +54,25 @@ await A.click("#tk"); await A.waitForSelector("#pTitle:has-text('Atendimento de 
 log("conversa vinculada, resposta enviada (simulada) e chamado aberto a partir do WhatsApp");
 await A.click("#closePanel"); await A.screenshot({ path: `${OUT}/m5_atendimento.png` });
 
+// Tipo de mapa e saúde do sistema
+await A.click("[data-view='3d']"); await A.click("#basemapSeg [data-bm='ruas']");
+if ((await A.getAttribute("#basemapSeg [data-bm='ruas']", "aria-pressed")) !== "true") throw new Error("seletor de mapa não marcou Ruas");
+await A.click("#basemapSeg [data-bm='satelite']"); await A.waitForTimeout(1500);
+await A.click("#saudeBtn"); await A.waitForSelector("#pTitle:has-text('Saúde do sistema')", { timeout: 10000 });
+await A.click("#sdNow"); await A.waitForSelector("#pBody td b:has-text('Banco de dados')", { timeout: 15000 });
+await A.screenshot({ path: `${OUT}/m6_saude.png` });
+// Nenhum erro de JavaScript pode ter sido registrado pelo vigia durante todo o teste
+const saude = await A.evaluate(async () => (await (await fetch("/api/saude", { headers: { "X-Requested-With": "plataforma" } })).json()).data);
+const errTela = saude.client_errors.filter(e => !e.resolved);
+if (errTela.length) throw new Error("vigia registrou erro de tela: " + JSON.stringify(errTela.slice(0, 3)));
+if (process.env.REQUIRE_REAL_MAP) {  // CI (com internet): mapa real E imagem de satélite precisam ter baixado de verdade
+  const fresh = await A.evaluate(async () => (await (await fetch("/api/saude?agora=1", { headers: { "X-Requested-With": "plataforma" } })).json()).data);
+  const mapa = fresh.checks.find(c => c.code === "mapa");
+  if (mapa.level !== "verde") throw new Error("mapa real/satélite não baixou: " + mapa.detail);
+  log("mapa real + satélite NASA baixados:", mapa.detail);
+}
+log("seletor de mapa ok; painel de saúde ok (" + saude.level + "); nenhum erro de tela registrado");
+
 await browser.close();
 if (errors.length) { console.log("ERROS:\n" + errors.join("\n")); process.exit(1); }
 console.log("E2E MAPA + COMANDOS + ATENDIMENTO OK");

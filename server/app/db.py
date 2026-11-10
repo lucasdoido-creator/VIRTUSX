@@ -344,6 +344,11 @@ CREATE TABLE IF NOT EXISTS messages (
   occurred_at TEXT, created_at TEXT NOT NULL, error TEXT
 );
 CREATE TABLE IF NOT EXISTS research_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, payload TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS client_errors (
+  id TEXT PRIMARY KEY, key TEXT NOT NULL UNIQUE, message TEXT NOT NULL, source TEXT, line INTEGER, where_ TEXT, stack TEXT,
+  build TEXT, server_build TEXT, user_agent TEXT, user_id TEXT, first_at TEXT NOT NULL, last_at TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 1, resolved INTEGER NOT NULL DEFAULT 0
+);
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (key TEXT PRIMARY KEY, scope TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL);
 """

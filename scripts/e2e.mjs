@@ -101,6 +101,10 @@ log("móvel modo leve:", await Mob.page.isChecked("#lite"));
 const pw = (await api(M.page, "/api/world")).data; log("parceiro vê prédios:", pw.partners.map(p => p.name).join(", "));
 const forbidden = await api(M.page, "/api/partners/prt_lisboa/building"); log("acesso a outro parceiro:", forbidden.error);
 
+const vig = await A.page.evaluate(async () => (await (await fetch("/api/saude", { headers: { "X-Requested-With": "plataforma" } })).json()).data);
+const vigErr = vig.client_errors.filter(e => !e.resolved);
+if (vigErr.length) { console.log("VIGIA REGISTROU ERRO DE TELA:\n" + JSON.stringify(vigErr.slice(0, 5), null, 1)); process.exit(1); }
+log("vigia: nenhum erro de tela registrado; saúde =", vig.level);
 await browser.close();
 const EXPECTED = [/status of 401/, /status of 403/, /ERR_INCOMPLETE_CHUNKED_ENCODING/, /ERR_FAILED/]; // login inicial, teste de isolamento, queda proposital do servidor
 const real = errors.filter(e => !EXPECTED.some(r => r.test(e)));

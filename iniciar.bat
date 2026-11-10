@@ -39,5 +39,6 @@ echo.
 echo Ambiente: %APP_ENV%  -  abra http://127.0.0.1:8000
 echo Login demo: admin@central.demo / demo1234
 echo.
-python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 3
+echo Vigia ligado: atualizou arquivos = reinicia sozinho; caiu = volta sozinho. Registro em data\logs\supervisor.log
+python rodar.py --host 127.0.0.1 --port 8000
 pause

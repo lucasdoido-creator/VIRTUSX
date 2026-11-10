@@ -8,6 +8,7 @@
 </head>
 <body>
 <div id="envbar" class="envbar" role="status">Carregando ambiente…</div>
+<div id="updbar" class="updbar hidden" role="status"></div>
 
 <section id="login" class="login hidden">
   <div class="box">
@@ -46,6 +47,7 @@
     </div>
     <button class="btn small" id="cmdBtn" title="Central de comandos (Ctrl+K)">⌘ Comandos</button>
     <button class="btn small" id="inboxBtn" title="Atendimento / WhatsApp">💬 Atendimento <span id="unread" class="badge hidden"></span></button>
+    <button class="btn small saude cinza hidden" id="saudeBtn" title="Saúde do sistema"><i></i>Saúde</button>
     <div class="spacer"></div>
     <span id="pausedNote" class="badge bad hidden">Agentes pausados</span>
     <label class="tog hidden" id="pauseWrap" title="Pausa global dos agentes"><input type="checkbox" id="pause"> <span class="tl">Pausar agentes</span><span class="ts">Pausar</span></label>
@@ -63,7 +65,9 @@
       <div class="filters" id="filters" aria-label="Filtros"></div>
       <div class="legend" id="legend">
         <div class="row"><span class="st verde"><i></i>sem pendências críticas</span><span class="st amarelo"><i></i>atenção</span><span class="st vermelho"><i></i>crítico</span><span class="st cinza"><i></i>sem dados</span></div>
-        <div class="note">Mapa real (Natural Earth). Clique num país ou estado para ver as operações. Arraste para girar · botão direito/Shift para mover · roda para aproximar. Posição pela cidade = aproximada; endereço confirmado = exato. Pulsos e movimentos só com eventos reais.</div>
+        <div class="row seg" id="basemapSeg" role="group" aria-label="Tipo de mapa" style="margin:6px 0"><button data-bm="satelite" aria-pressed="false">Satélite</button><button data-bm="ruas" aria-pressed="false">Ruas</button><button data-bm="vetor" aria-pressed="false">Escuro</button></div>
+        <div class="note">Mapa real: imagem de satélite e fronteiras de países e estados; aproxime para ver mais detalhe (ou ruas). Clique num país ou estado para ver as operações. Arraste para girar · botão direito/Shift para mover · roda para aproximar. Posição pela cidade = aproximada; endereço confirmado = exato. Pulsos e movimentos só com eventos reais. Colunas verdes nas unidades = operações feitas em 30 dias; âmbar/vermelho = abertas/atrasadas.</div>
+        <div class="attrib">Satélite: NASA Blue Marble (domínio público) · Ruas: © colaboradores do OpenStreetMap · Fronteiras: Natural Earth</div>
       </div>
     </div>
     <section id="tables" class="tables hidden">
@@ -78,6 +82,7 @@
   </main>
   <footer class="ticker" id="ticker" aria-live="off"><span>Aguardando eventos…</span></footer>
 </div>
+<script src="/static/js/vigia.js"></script>
 <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

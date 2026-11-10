@@ -21,6 +21,7 @@ export const FLOORS = [["recepcao", "Recepção"], ["comercial", "Comercial"], [
 const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 const COUNTRY_PT = { Brazil: "Brasil", Portugal: "Portugal", "United States of America": "Estados Unidos" };
 
+const loadImg = src => new Promise((ok, fail) => { const i = new Image(); i.onload = () => ok(i); i.onerror = fail; i.src = src; });
 function pip(lon, lat, ring) {  // ponto no polígono (anel achatado [lon,lat,...])
   let inside = false;
   for (let i = 0, j = ring.length - 2; i < ring.length; j = i, i += 2) {
@@ -58,6 +59,8 @@ export class World {
     let pending = false;
     this.r.onHover = e => { if (pending || !this.tip) return; pending = true; requestAnimationFrame(() => { pending = false; this._hover(e); }); };
     this.r.onFrame = () => this._placeLabels();
+    let bm = null; try { bm = localStorage.getItem("mapaBase"); } catch {} this.basemap = bm || "satelite";
+    this.r.onCamera = () => this._detailSoon();
   }
   _hover(e) {
     const rc = this.r.canvas.getBoundingClientRect(), g = this.r.groundPoint(e.clientX - rc.left, e.clientY - rc.top);
@@ -71,20 +74,29 @@ export class World {
   setGeo(geo) {
     if (!geo || !geo.available) return;
     this.countries = geo.countries; this._paint();
+    if (!this.satReq) {  // imagem de satélite real (NASA Blue Marble); sem ela, fica o mapa vetorial
+      this.satReq = true; const img = new Image();
+      img.onload = () => { this.sat = img; this._paint(); this.h.onImagery && this.h.onImagery("mundo", true); this._detailSoon(); };
+      img.onerror = () => { this.h.onImagery && this.h.onImagery("mundo", false); };
+      img.src = "/api/geo/imagem/mundo" + (this.r.lite ? "?leve=1" : "");
+    }
     this.r.addLineSet("paises", segments(this.countries, 0.25), [0.40, 0.75, 1.0, 0.55]);
   }
   _paint() {
     if (!this.countries.length) return;
     const W = this.r.lite ? 2048 : 4096, H = W / 2, cv = document.createElement("canvas"); cv.width = W; cv.height = H;
     const g = cv.getContext("2d"), X = lon => (lon + 180) / 360 * W, Y = lat => (90 - lat) / 180 * H;
-    g.fillStyle = "#040a1a"; g.fillRect(0, 0, W, H);
-    g.strokeStyle = "rgba(90,120,200,0.12)"; g.lineWidth = 1;
+    const sat = this.sat && this.basemap !== "vetor";
+    if (sat) { g.drawImage(this.sat, 0, 0, W, H); g.fillStyle = "rgba(2,8,22,0.28)"; g.fillRect(0, 0, W, H); }  // leve escurecida p/ leitura dos rótulos
+    else { g.fillStyle = "#040a1a"; g.fillRect(0, 0, W, H); }
+    g.strokeStyle = sat ? "rgba(255,255,255,0.06)" : "rgba(90,120,200,0.12)"; g.lineWidth = 1;
     for (let lon = -180; lon <= 180; lon += 15) { g.beginPath(); g.moveTo(X(lon), 0); g.lineTo(X(lon), H); g.stroke(); }
     for (let lat = -90; lat <= 90; lat += 15) { g.beginPath(); g.moveTo(0, Y(lat)); g.lineTo(W, Y(lat)); g.stroke(); }
     const active = new Set(Object.values((this.data && this.data.region_country) || {}).filter(n =>
       this.data.partners.some(p => (this.data.region_country || {})[p.region_code] === n)));
     for (const c of this.countries) {
-      g.fillStyle = active.has(c.name) ? "#0f3a44" : "#0e1a33"; g.beginPath();
+      if (sat && !active.has(c.name)) continue;
+      g.fillStyle = sat ? "rgba(94,234,212,0.13)" : active.has(c.name) ? "#0f3a44" : "#0e1a33"; g.beginPath();
       for (const r of c.rings) { g.moveTo(X(r[0]), Y(r[1])); for (let i = 2; i < r.length; i += 2) g.lineTo(X(r[i]), Y(r[i + 1])); g.closePath(); }
       g.fill("evenodd");
     }
@@ -113,7 +125,12 @@ export class World {
     const c = ((this.data && this.data.country_center) || {})[region] || [0, 0];
     return { pos: ll(c[0], c[1]), approx: true };
   }
+  _safe(what, fn) {  // um item com dado ruim não derruba o mapa inteiro: pula o item e avisa o vigia
+    try { return fn(); } catch (e) { this.h.onError && this.h.onError(e, "3d:" + what); }
+  }
   build(data) {
+    data.hq = data.hq && data.hq.lat != null ? data.hq : { lat: -23.5505, lng: -46.6333 };
+    for (const k of ["partners", "warehouses", "service_bases", "regions", "sectors", "agents"]) data[k] = data[k] || [];
     this.data = data; const r = this.r; r.clear(); this.objs.clear(); this.occ = new Set();
     this.labelsEl.innerHTML = ""; this.labels = [];
     r.add({ pos: [0, -1, 0], scale: [360 * K + 4000, 1, 180 * K + 4000], color: [0.02, 0.04, 0.10], tex: 1 });
@@ -128,11 +145,11 @@ export class World {
     r.add({ pos: add3(HQ, [0, 0, 0]), scale: [90, 0.3, 90], color: [0.37, 0.92, 0.83], emissive: 0.4, alpha: 0.18 });  // sinal visível de longe
     this.objs.set("hq", hq); this._label("hq", "Administração central", add3(HQ, [0, 60, 0]), { kind: "hq", id: "hq" }, false, null, null, [0, 14000]);
     for (const k of Object.keys(SECTOR_OFF)) this.occ.add(`${Math.round((HQ[0] + SECTOR_OFF[k][0]) / 18)},${Math.round((HQ[2] + SECTOR_OFF[k][2]) / 18)}`);
-    if (central) for (const s of data.sectors) {
+    if (central) for (const s of data.sectors) this._safe("setor", () => {
       const pos = add3(HQ, SECTOR_OFF[s.code]);
       const m = r.add({ pos, scale: [12, 12, 12], color: SECTOR_COLOR[s.code], win: 1, pick: { kind: "sector", id: s.code, data: s } });
       this.objs.set("sector:" + s.code, m); this._label("sector:" + s.code, `${s.name}<small> · ${esc(s.metric)}</small>`, add3(pos, [0, 15, 0]), { kind: "sector", id: s.code }, true);
-    }
+    });
     // países com operação: rótulo visível de longe
     for (const reg of data.regions) {
       const n = (data.partners.filter(p => p.region_code === reg.code)).length; if (!n && !central) continue;
@@ -140,15 +157,15 @@ export class World {
       this._label("region:" + reg.code, `${esc(reg.name)} <small>${n} cliente(s)/parceiro(s) · ${reg.sales_enabled ? "vendas liberadas" : "vendas bloqueadas"}</small>`,
         ll(c[0], c[1]), { kind: "region", id: reg.code, data: reg }, false, null, "pais", [1800, 14000]);
     }
-    for (const w of data.warehouses) {
+    for (const w of data.warehouses) this._safe("armazem", () => {
       const { pos: p0 } = this._coordOf(w.lat, w.lng, w.region_code), pos = this._place(p0);
       const m = r.add({ pos, scale: [24, 7, 13], color: [0.22, 0.26, 0.33], pick: { kind: "warehouse", id: w.id, data: w } });
       if (w.low) r.add({ pos: add3(pos, [0, 7, 0]), scale: [24, 0.5, 13], color: LEVEL_RGB.amarelo, emissive: 0.5, alpha: 0.7 });
       this.objs.set("warehouse:" + w.id, m);
       this._label("warehouse:" + w.id, `${esc(w.name)} <small>${w.stock.on_hand - w.stock.reserved} disp. · ${w.stock.reserved} reserv.</small>`, add3(pos, [0, 10, 0]), { kind: "warehouse", id: w.id }, true);
       r.lines.push({ a: add3(HQ, [0, 40, 0]), b: add3(pos, [0, 7, 0]), color: [0.37, 0.92, 0.83, 0.35] });
-    }
-    (data.service_bases || []).forEach(sb => {
+    });
+    (data.service_bases || []).forEach(sb => this._safe("base", () => {
       const { pos: p0 } = this._coordOf(sb.lat, sb.lng, "BR"), pos = this._place(p0); sb._pos = pos;
       r.add({ pos, scale: [9, 12, 7], color: [0.10, 0.22, 0.30], win: 1, edge: 1, winColor: [0.35, 1.0, 0.75], pick: { kind: "base", id: sb.id, data: sb } });
       r.add({ pos: add3(pos, [0, 12, 0]), scale: [0.6, 7, 0.6], color: [0.35, 1.0, 0.75], emissive: 1.0 });
@@ -156,8 +173,9 @@ export class World {
       this.objs.set("base:" + sb.id, { pos, home: pos });
       this._label("base:" + sb.id, `<span class="sw" style="background:#5ff5c0"></span>Base · ${esc(sb.name)} <small>${esc(sb.city || "")} · ${sb.tecnicos} técnico(s)${sb.pendentes ? ` · ${sb.pendentes} aguardando` : ""}</small>`,
         add3(pos, [0, 21, 0]), { kind: "base", id: sb.id, data: sb }, false, null, null, [0, 5000]);
-    });
-    for (const p of data.partners) {
+    }));
+    for (const p of data.partners) this._safe("cliente", () => {
+      p.units = p.units || []; p.status = p.status || { level: "cinza" };
       const u0 = p.units.find(u => u.lat != null) || p.units[0] || {};
       const { pos: p0, approx } = this._coordOf(u0.lat, u0.lng, p.region_code), pos = this._place(p0);
       const lvl = p.status.level, h = 20 + Math.min(p.units.length, 4) * 5, visible = this._passes(p);
@@ -170,6 +188,10 @@ export class World {
         const own = u.lat != null && u !== u0 ? this._place(ll(u.lat, u.lng)) : add3(pos, [7.5, 0, -3 + j * 4]);
         r.add({ pos: own, scale: [3, 3.5, 3], color: u.location_status === "confirmada" ? [0.25, 0.45, 0.6] : [0.22, 0.25, 0.3], visible,
           pick: { kind: "unit", id: u.id, data: { ...u, partner: p.name } } });
+        const o = u.ops || {};  // operações: coluna verde = feitas em 30 dias; topo âmbar/vermelho = abertas/atrasadas
+        if (o.feitas_30d) r.add({ pos: add3(own, [0, 3.5, 0]), scale: [1.1, Math.min(14, 1 + o.feitas_30d * 0.8), 1.1], color: LEVEL_RGB.verde, emissive: 0.8, alpha: 0.85, visible });
+        if (o.abertas) r.add({ pos: add3(own, [-2.2, 0, 0]), scale: [1.3, 2 + Math.min(8, o.abertas), 1.3], color: o.atrasadas ? LEVEL_RGB.vermelho : LEVEL_RGB.amarelo, emissive: 0.85, visible });
+        this.objs.set("unit:" + u.id, { pos: own });
         if (u.lat != null && u !== u0) {
           r.lines.push({ a: add3(pos, [0, 2, 0]), b: add3(own, [0, 2, 0]), color: [0.60, 0.80, 1.0, visible ? 0.35 : 0.05] });
           this._label("unit:" + u.id, `${esc(u.name)} <small>${esc(u.city || "")}</small>`, add3(own, [0, 6, 0]), { kind: "unit", id: u.id, data: { ...u, partner: p.name } }, true, () => this._passes(p));
@@ -177,18 +199,21 @@ export class World {
       });
       this.objs.set("partner:" + p.id, b); this.objs.set("partnerparts:" + p.id, [base, beacon, ring]);
       b.home = pos; b.h = h; b.approx = approx;
-      this._label("partner:" + p.id, `<span class="sw" style="background:rgb(${LEVEL_RGB[lvl].map(x => x * 255 | 0)})"></span>${esc(p.name)} <small>· ${statusText(lvl)}${approx ? " · local a definir" : ""}</small>`,
+      const ab = p.units.reduce((a, u) => a + ((u.ops || {}).abertas || 0), 0), fe = p.units.reduce((a, u) => a + ((u.ops || {}).feitas_30d || 0), 0);
+      const opsTxt = ab || fe ? ` · ${ab} aberta(s) · ${fe} feita(s) 30d` : "";
+      this._label("partner:" + p.id, `<span class="sw" style="background:rgb(${LEVEL_RGB[lvl].map(x => x * 255 | 0)})"></span>${esc(p.name)} <small>· ${statusText(lvl)}${opsTxt}${approx ? " · local a definir" : ""}</small>`,
         add3(pos, [0, h + 4, 0]), { kind: "partner", id: p.id }, false, () => this._passes(p), null, [0, 4500]);
       const wh = data.warehouses.find(w => w.region_code === p.region_code), whm = wh && this.objs.get("warehouse:" + wh.id);
       r.lines.push({ a: whm ? add3(whm.pos, [0, 7, 0]) : add3(HQ, [0, 40, 0]), b: add3(pos, [0, 2, 0]), color: [0.65, 0.55, 0.98, visible ? 0.35 : 0.05] });
-    }
+    });
     for (const sb of data.service_bases || []) {
-      for (const pid of new Set(sb.units.map(u => u.partner_id))) {
+      if (!sb._pos) continue;
+      for (const pid of new Set((sb.units || []).map(u => u.partner_id))) {
         const b = this.objs.get("partner:" + pid); if (b) r.lines.push({ a: add3(sb._pos, [0, 12, 0]), b: add3(b.home, [0, 3, 0]), color: [0.35, 1.0, 0.75, 0.45] });
       }
     }
-    if (this.states) this.setStates(this.states);
-    this._buildAgents(data.agents);
+    if (this.states) this._safe("estados", () => this.setStates(this.states));
+    this._safe("agentes", () => this._buildAgents(data.agents));
     if (this.inside) this.enterBuilding(this.inside, true);
     r.dirty = true;
   }
@@ -250,7 +275,7 @@ export class World {
     const asp = this.r.canvas.clientWidth / Math.max(1, this.r.canvas.clientHeight);
     if (asp < 1) dist *= Math.min(2.2, 0.95 / asp); // tela em pé (celular): afasta a câmera para caber
     to(this.r.cam, { tx: target[0], ty: target[1], tz: target[2], dist, pitch, ...(yaw !== undefined ? { yaw } : {}), duration: 1.3, ease: "power3.inOut",
-      onUpdate: () => (this.r.dirty = true) });
+      onUpdate: () => (this.r.dirty = true), onComplete: () => this._detailSoon() });
   }
   flyBox(b, pitch = 1.05) {
     const w = (b[2] - b[0]) * K, h = (b[3] - b[1]) * K;
@@ -291,6 +316,46 @@ export class World {
     this.floorMeshes = []; this.inside = null; this.r.dirty = true;
   }
   // Pulso apenas para eventos REAIS recebidos do servidor.
+  // ---------------------------------------------------------------- detalhe da área em foco
+  // Satélite (NASA, até ~500 m/pixel) ou ruas (OpenStreetMap) só da região que a câmera está olhando.
+  setBasemap(mode) { this.basemap = mode; this._paint(); this.detKey = null; this._detailSoon(); }
+  _detailSoon() { clearTimeout(this._detT); this._detT = setTimeout(() => this._detail().catch(e => {  // sem internet/imagem: só não mostra o detalhe
+    if (e instanceof Error && !/fetch|network|load/i.test(e.message)) this.h.onError && this.h.onError(e, "3d:detalhe"); }), 700); }
+  async _detail() {
+    const cam = this.r.cam, spanDeg = cam.dist * 2.2 / K;
+    if (!this.countries.length || spanDeg > 40) { if (this.r.detBox) this.r.clearDetail(); this.detKey = null; return; }
+    const mode = this.basemap === "ruas" ? "ruas" : this.sat ? "satelite" : null; if (!mode) return;
+    const levels = mode === "ruas" ? [32, 16, 8, 4, 2, 1] : [32, 16, 8, 4];
+    let L = levels[0]; for (const l of levels) if (l >= spanDeg * 1.4) L = l;
+    const lon = cam.tx / K, lat = -cam.tz / K, step = L / 2;
+    const w = Math.max(-180, Math.round(lon / step) * step - L / 2), s = Math.max(-85, Math.round(lat / step) * step - L / 2);
+    const box = [w, s, Math.min(180, w + L), Math.min(85, s + L)], key = mode + ":" + box.join(",");
+    if (key === this.detKey) return; this.detKey = key;
+    const cv = mode === "ruas" ? await this._streets(box) : await this._satBox(box);
+    if (cv && this.detKey === key) this.r.setDetail(cv.canvas, cv.box);
+  }
+  async _satBox(b) {
+    const r = await fetch(`/api/geo/imagem/regiao?bbox=${b.join(",")}`, { credentials: "same-origin" }); if (!r.ok || r.status === 204) return null;
+    const box = (r.headers.get("X-Bbox") || b.join(",")).split(",").map(Number), url = URL.createObjectURL(await r.blob());
+    try { const img = await loadImg(url); const S = this.r.lite ? 1024 : 2048, cv = document.createElement("canvas"); cv.width = cv.height = S;
+      const g = cv.getContext("2d"); g.drawImage(img, 0, 0, S, S); g.fillStyle = "rgba(2,8,22,0.22)"; g.fillRect(0, 0, S, S); return { canvas: cv, box }; }
+    finally { URL.revokeObjectURL(url); }
+  }
+  async _streets(b) {  // tiles OSM (Mercator) desenhados por faixa de latitude → encaixe exato no mapa equiretangular
+    const [w, s, e, n] = b, t2lon = (x, z) => x / 2 ** z * 360 - 180, t2lat = (y, z) => { const k = Math.PI - 2 * Math.PI * y / 2 ** z; return 180 / Math.PI * Math.atan(Math.sinh(k)); };
+    const lon2x = (lon, z) => Math.floor((lon + 180) / 360 * 2 ** z), lat2y = (lat, z) => { const r = lat * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 2 ** z); };
+    let z = Math.min(13, Math.max(3, Math.round(Math.log2(360 / (e - w))) + 2));
+    while (z > 3 && (lon2x(e, z) - lon2x(w, z) + 1) * (lat2y(s, z) - lat2y(n, z) + 1) > 36) z--;
+    const S = this.r.lite ? 1024 : 2048, cv = document.createElement("canvas"); cv.width = cv.height = S; const g = cv.getContext("2d");
+    g.fillStyle = "#1b2433"; g.fillRect(0, 0, S, S);
+    const jobs = [];
+    for (let x = lon2x(w, z); x <= lon2x(e, z); x++) for (let y = lat2y(n, z); y <= lat2y(s, z); y++) jobs.push(loadImg(`/api/geo/tile/${z}/${x}/${y}`).then(img => {
+      const x0 = (t2lon(x, z) - w) / (e - w) * S, x1 = (t2lon(x + 1, z) - w) / (e - w) * S, y0 = (n - t2lat(y, z)) / (n - s) * S, y1 = (n - t2lat(y + 1, z)) / (n - s) * S;
+      g.drawImage(img, x0, y0, x1 - x0, y1 - y0); }).catch(() => {}));
+    await Promise.all(jobs);
+    g.fillStyle = "rgba(4,10,26,0.35)"; g.fillRect(0, 0, S, S);  // tom escuro: combina com a central e destaca os prédios
+    return { canvas: cv, box: b };
+  }
   pulseFor(ev) {
     if (ev.type === "ceo.contratou" && ev.payload) {  // linha do CEO até o agente contratado (evento real)
       const ceo = this.objs.get("ceo:" + ev.partner_id), ag = this.objs.get("agent:" + ev.entity_id);
@@ -300,6 +365,12 @@ export class World {
     if (ev.type.startsWith("ceo.") && ev.partner_id) {
       const ceo = this.objs.get("ceo:" + ev.partner_id); if (ceo) this.r.pulse(add3(this.HQ, [0, 56, 0]), add3(ceo.pos, [0, 5, 0]), [0.65, 0.55, 1.0], 1.6);
       return;
+    }
+    if (ev.type.startsWith("tarefa.") || ev.type.startsWith("pendencia.")) {  // operação na unidade: sai da base que atende
+      const uid = (ev.payload || {}).unit_id, um = uid && this.objs.get("unit:" + uid);
+      const sb = uid && (this.data.service_bases || []).find(x => (x.units || []).some(u => u.id === uid) && x._pos);
+      if (um) { const done = ev.status === "concluida";
+        return this.r.pulse(sb ? add3(sb._pos, [0, 12, 0]) : add3(um.pos, [0, 30, 0]), add3(um.pos, [0, 4, 0]), done ? LEVEL_RGB.verde : [0.38, 0.65, 1.0], done ? 1.6 : 1.2); }
     }
     if (!ev.partner_id) return; const b = this.objs.get("partner:" + ev.partner_id); if (!b) return;
     const color = ev.type.startsWith("pagamento") ? [0.20, 0.83, 0.60] : ev.type.startsWith("estoque") ? [0.98, 0.75, 0.14]

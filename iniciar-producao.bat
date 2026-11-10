@@ -38,7 +38,8 @@ set APP_ENV=production
 echo.
 echo ================== PRODUCAO - dados e acoes reais ==================
 echo Abra http://127.0.0.1:8001  -  no primeiro acesso, crie o administrador.
-echo Dados ficam em D:\VIRTUSX\data\plataforma_production.sqlite3 - faca backup desse arquivo.
+echo Dados ficam em D:\VIRTUSX\data\plataforma_production.sqlite3 - copia de seguranca automatica diaria em data\backups.
 echo.
-python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8001 --timeout-graceful-shutdown 3
+echo Vigia ligado: atualizou arquivos = reinicia sozinho; caiu = volta sozinho. Registro em data\logs\supervisor.log
+python rodar.py --host 127.0.0.1 --port 8001
 pause

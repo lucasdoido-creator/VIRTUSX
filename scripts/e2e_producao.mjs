@@ -68,6 +68,10 @@ await T.click("#tEdit button"); await T.waitForFunction(() => document.querySele
 await T.screenshot({ path: `${OUT}/p3_tecnico_celular.png` });
 log(`freelancer marcou ${n} itens, anexou evidência e concluiu pelo celular`);
 
+const vig = await A.evaluate(async () => (await (await fetch("/api/saude", { headers: { "X-Requested-With": "plataforma" } })).json()).data);
+const vigErr = vig.client_errors.filter(e => !e.resolved);
+if (vigErr.length) { console.log("VIGIA REGISTROU ERRO DE TELA:\n" + JSON.stringify(vigErr.slice(0, 5), null, 1)); process.exit(1); }
+log("vigia: nenhum erro de tela registrado; saúde =", vig.level);
 await browser.close();
 if (errors.length) { console.log("ERROS:\n" + errors.join("\n")); process.exit(1); }
 console.log("E2E PRODUÇÃO OK");

@@ -132,3 +132,7 @@ form.f input,form.f select,form.f textarea{background:var(--bg2);border:1px soli
 .seg button{white-space:nowrap}header.top .btn{white-space:nowrap;flex:none}
 label.tog .ts{display:none}
 @media (max-width:1680px){header.top{gap:8px}label.tog .tl{display:none}label.tog .ts{display:inline}.brand span{display:none}}
+.updbar{position:fixed;top:34px;left:50%;transform:translateX(-50%);z-index:90;background:#13233f;border:1px solid var(--line2);border-radius:10px;padding:8px 12px;display:flex;gap:10px;align-items:center;box-shadow:0 8px 30px rgba(0,0,0,.4)}
+.btn.saude i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#94a3b8;vertical-align:middle}
+.btn.saude.verde i{background:#34d399}.btn.saude.amarelo i{background:#fbbf24}.btn.saude.vermelho i{background:#f87171;box-shadow:0 0 8px #f87171}
+.attrib{font-size:10px;color:var(--muted);margin-top:6px}

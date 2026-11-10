@@ -300,3 +300,101 @@ def status():
     d = _geo_dir()
     return {"countries": (d / "countries.json").exists(), "states": (d / "states" / "_pronto").exists(),
             "states_job": _state["admin1"], "error": _state["admin1_error"] or _state["countries_error"]}
+
+
+# ------------------------------------------------------------------ imagens reais do terreno
+# Satélite: NASA GIBS (Blue Marble, domínio público) em projeção geográfica — encaixa direto no mapa equiretangular.
+# Ruas (zoom de cidade): OpenStreetMap, com cache em disco, User-Agent identificado e atribuição na tela
+# (política de uso dos tiles OSM: sem download em massa; aqui só os tiles da área aberta, uma vez).
+GIBS_WMS = "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi"
+GIBS_LAYERS = ("BlueMarble_ShadedRelief_Bathymetry", "BlueMarble_NextGeneration")
+OSM_TILE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+UA = "VIRTUSX/1.0 (+https://github.com/lucasdoido-creator/VIRTUSX)"
+_tile_lock = threading.Lock()
+_tile_last = [0.0]
+_img_state = {"error": None}
+
+
+def _get_img(url, timeout=90):
+    if TRANSPORT["get"]:
+        return TRANSPORT["get"](url)
+    import httpx
+    r = httpx.get(url, timeout=timeout, follow_redirects=True, headers={"User-Agent": UA})
+    r.raise_for_status()
+    return r.content
+
+
+def _is_jpeg(b): return len(b) > 1000 and b[:3] == b"\xff\xd8\xff"
+def _is_png(b): return len(b) > 60 and b[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def _wms(bbox, w, h):
+    last = None
+    for layer in GIBS_LAYERS:
+        url = (f"{GIBS_WMS}?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS={layer}&STYLES=&SRS=EPSG:4326"
+               f"&BBOX={bbox[0]:.4f},{bbox[1]:.4f},{bbox[2]:.4f},{bbox[3]:.4f}&WIDTH={w}&HEIGHT={h}&FORMAT=image/jpeg")
+        try:
+            b = _get_img(url)
+            if _is_jpeg(b):
+                return b, layer
+            last = "resposta não é imagem: " + b[:120].decode("utf-8", "replace")
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+    raise RuntimeError(last or "falha")
+
+
+def image_world(size=4096):
+    """JPEG do mundo inteiro (equiretangular). None se ainda não foi possível baixar."""
+    size = 4096 if size >= 4096 else 2048
+    f = _geo_dir() / "img" / f"mundo_{size}.jpg"
+    if f.exists():
+        return f.read_bytes()
+    try:
+        b, layer = _wms((-180, -90, 180, 90), size, size // 2)
+        f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(b)
+        (f.parent / "fonte.txt").write_text(f"NASA GIBS · {layer} (domínio público) · {iso()}", encoding="utf-8")
+        _img_state["error"] = None
+        return b
+    except Exception as e:
+        _img_state["error"] = str(e)[:200]
+        return None
+
+
+def image_box(w, s, e, n):
+    """JPEG de uma região (estado) em resolução maior. Caixa arredondada para reaproveitar o cache."""
+    w, s, e, n = (round(max(-180, w) - 0.25, 1), round(max(-90, s) - 0.25, 1), round(min(180, e) + 0.25, 1), round(min(90, n) + 0.25, 1))
+    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90) or (e - w) > 60 or (n - s) > 60:
+        raise ValueError("região inválida ou grande demais")
+    f = _geo_dir() / "img" / f"box_{w}_{s}_{e}_{n}.jpg"
+    if f.exists():
+        return f.read_bytes(), (w, s, e, n)
+    aspect = (e - w) / (n - s)
+    W, H = (2048, max(64, int(2048 / aspect))) if aspect >= 1 else (max(64, int(2048 * aspect)), 2048)
+    b, _ = _wms((w, s, e, n), W, H)
+    f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(b)
+    return b, (w, s, e, n)
+
+
+def tile(z, x, y):
+    """Tile de ruas (OSM) com cache permanente em disco; no máx. ~4 downloads/s, nunca em massa."""
+    z, x, y = int(z), int(x), int(y)
+    if not (3 <= z <= 17 and 0 <= x < 2 ** z and 0 <= y < 2 ** z):
+        raise ValueError("tile inválido")
+    f = _geo_dir() / "tiles" / str(z) / str(x) / f"{y}.png"
+    if f.exists():
+        return f.read_bytes()
+    with _tile_lock:
+        wait = 0.25 - (time.time() - _tile_last[0])
+        if wait > 0:
+            time.sleep(wait)
+        _tile_last[0] = time.time()
+    b = _get_img(OSM_TILE.format(z=z, x=x, y=y), timeout=30)
+    if not _is_png(b):
+        raise RuntimeError("tile inválido recebido")
+    f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(b)
+    return b
+
+
+def imagery_status():
+    d = _geo_dir() / "img"
+    return {"world": any(d.glob("mundo_*.jpg")) if d.exists() else False, "error": _img_state["error"]}

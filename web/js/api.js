@@ -36,7 +36,8 @@ export class Live {
       if (ev.id <= this.lastId) return; // proteção contra entrega repetida
       this.lastId = ev.id; this.onEvent(ev);
     });
-    this.es.addEventListener("ping", () => { this.lastSignal = Date.now(); if (this.state !== "ao_vivo") this._set("ao_vivo"); });
+    this.es.addEventListener("ping", m => { this.lastSignal = Date.now(); if (this.state !== "ao_vivo") this._set("ao_vivo");
+      try { this.onPing && this.onPing(JSON.parse(m.data)); } catch {} });
     this.es.onerror = () => {
       if (this.lostAt === null) this.lostAt = new Date();
       this._set("reconectando");

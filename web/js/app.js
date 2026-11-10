@@ -49,6 +49,7 @@ async function showLogin() {
   $("#login").querySelectorAll("[data-demo]").forEach(b => b.onclick = () => { $("#login [name=email]").value = b.dataset.demo; $("#login [name=password]").value = "demo1234"; });
 }
 async function start() {
+  try { S.build = (await (await fetch("/api/health")).json()).build; window.__build = S.build; } catch {}
   await loadGsapIfAvailable();
   $("#app").classList.remove("hidden");
   $("#who").textContent = `${S.me.name} · ${S.me.partner ? S.me.partner.name : "Central"}`;
@@ -66,11 +67,16 @@ async function start() {
   S.world = await api("/api/world");
   try {
     S.renderer = new Renderer($("#gl"), { lite: S.lite });
-    S.w = new World(S.renderer, $("#labels"), { onSelect: select });
+    S.w = new World(S.renderer, $("#labels"), { onSelect: select, onError: (er, where) => window.__vigia && window.__vigia(er.message, "", 0, er.stack, where) });
     S.w.build(S.world);
     if (S.world.view === "parceiro" && S.world.partners[0]) S.w.focus("partner", S.world.partners[0].id); else S.w.focus("global");
+    const bmSeg = $("#basemapSeg"), bmMark = () => bmSeg.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.bm === S.w.basemap)));
+    bmSeg.querySelectorAll("button").forEach(b => b.onclick = () => { try { localStorage.setItem("mapaBase", b.dataset.bm); } catch {} S.w.setBasemap(b.dataset.bm); bmMark(); });
+    bmMark();
+    S.w.h.onImagery = (what, okImg) => { if (!okImg && what === "mundo" && S.w.basemap !== "vetor") toast("Imagem de satélite ainda não baixada (o servidor precisa de internet uma vez). Mostrando o mapa escuro.", true); };
     api("/api/geo/countries").then(g => { S.geo = g; if (g.available) S.w.setGeo(g); else toast("Mapa real ainda não baixado: o servidor precisa de internet uma vez.", true); }).catch(() => {});
   } catch (e) {
+    window.__vigia && window.__vigia(e.message, "", 0, e.stack, "3d:inicio");
     $("#stage").innerHTML = `<div class="card" style="margin:60px auto;max-width:520px">O modo 3D não está disponível neste dispositivo (${esc(e.message)}). Todas as informações estão no modo tabelas.</div>`;
     setView("tabelas");
   }
@@ -81,8 +87,40 @@ async function start() {
   if (!can("atendimento.read")) $("#inboxBtn").classList.add("hidden"); else updateUnread();
   document.addEventListener("keydown", e => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openCommands(); } });
   updateHeader();
-  S.live = new Live({ onEvent, onState: liveState, onResync: () => { toast("Conexão restabelecida — dados sincronizados"); refresh(); } });
+  if (can("sistema.saude")) { $("#saudeBtn").classList.remove("hidden"); $("#saudeBtn").onclick = openSaude; updateSaude(); setInterval(updateSaude, 60000); }
+  S.live = new Live({ onEvent, onState: liveState, onPing: d => { if (d.build && S.build && d.build !== S.build) newVersion(); },
+    onResync: () => { toast("Conexão restabelecida — dados sincronizados"); refresh(); } });
   S.live.start(S.world.last_event_id);
+}
+
+// ------------------------------------------------------------------ versão nova e saúde do sistema
+let reloadTimer = null;
+function newVersion() {  // o servidor foi atualizado: a tela se atualiza sozinha (sem perder o que está sendo digitado)
+  const bar = $("#updbar"); bar.classList.remove("hidden");
+  const busy = () => { const a = document.activeElement; return a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.value; };
+  bar.innerHTML = `Nova versão do sistema instalada. <button class="btn small" id="updNow">Atualizar agora</button>`;
+  $("#updNow").onclick = () => location.reload();
+  if (!reloadTimer) reloadTimer = setInterval(() => { if (!busy()) location.reload(); }, 8000);
+}
+async function updateSaude() {
+  try { const h = await (await fetch("/api/health")).json(); const l = (h.saude && h.saude.level) || "cinza";
+    const b = $("#saudeBtn"); b.className = "btn small saude " + l; b.title = "Saúde do sistema: " + statusText(l);
+    if (h.build && S.build && h.build !== S.build) newVersion(); } catch {}
+}
+async function openSaude(agora) {
+  const d = await api("/api/saude" + (agora === true ? "?agora=1" : ""));
+  const lvl = l => `<span class="st ${l}"><i></i></span>`;
+  openPanel({ title: "Saúde do sistema", sub: `${st(d.level)} · verificado ${fmtTime(d.checked_at)} · versão ${esc(d.build)}`, reload: () => openSaude(),
+    html: `<p class="muted">Verificações automáticas a cada 5 minutos. Item vermelho gera alerta e uma pendência crítica para a central.</p>
+      <table class="t"><tbody>${d.checks.map(c => `<tr><td>${lvl(c.level)}</td><td><b>${esc(c.title)}</b><div class="muted">${esc(c.detail)}</div>${c.auto ? `<div class="muted">Automático: ${esc(c.auto)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
+      <div class="row" style="margin:10px 0"><button class="btn small primary" id="sdNow">Verificar agora</button>
+      ${d.client_errors.some(e => !e.resolved) ? `<button class="btn small" id="sdRes">Marcar erros de tela como resolvidos</button>` : ""}</div>
+      <h4>Erros registrados na tela (navegador)</h4>
+      ${d.client_errors.length ? d.client_errors.map(e => `<div class="card"><b>${esc(e.message)}</b> ${e.resolved ? badge("resolvido", "ok") : badge(e.count + "×", "warn")}
+        <div class="muted mono">${esc(e.source || "")}${e.line ? ":" + e.line : ""} · ${esc(e.onde || "")} · tela ${esc(e.build || "?")} / servidor ${esc(e.server_build || "?")} · último ${fmtTime(e.last_at)}</div></div>`).join("") : `<p class="muted">Nenhum.</p>`}
+      <h4>Cópias de segurança (data/backups)</h4>${d.backups.length ? d.backups.map(b => `<div class="muted mono">${esc(b.file)} · ${(b.bytes / 1e6).toFixed(1)} MB</div>`).join("") : `<p class="muted">Nenhuma ainda.</p>`}` });
+  $("#sdNow").onclick = () => openSaude(true).then(updateSaude);
+  const r = $("#sdRes"); if (r) r.onclick = async () => { await api("/api/saude/erros/resolver", { method: "POST" }); openSaude(true); updateSaude(); };
 }
 
 // Técnico/freelancer: sem mundo 3D nem dados de clientes; só as próprias tarefas, com checklist e evidências.
@@ -108,6 +146,7 @@ function onEvent(ev) {
   $("#ticker").innerHTML = `<span>Últimos eventos:</span>` + S.ticker.slice(0, 5).map(e =>
     `<span title="ocorrido ${fmtTime(e.occurred_at)} · recebido ${fmtTime(e.received_at)}"><b>${esc(e.type)}</b> ${esc(e.status)} · ${new Date(e.received_at).toLocaleTimeString("pt-BR")}</span>`).join("");
   if (S.w) S.w.pulseFor(ev);
+  if (ev.type.startsWith("sistema.") && can("sistema.saude")) { updateSaude(); if (ev.type === "sistema.alerta") toast("Alerta do sistema: " + ((ev.payload || {}).verificacao || ""), true); }
   if (ev.type.startsWith("whatsapp") || ev.type.startsWith("canal")) { updateUnread(); if (S.view === "tabelas" && S.tab === "atendimento") renderTables(true); }
   if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; refresh(); }, 800); // agrupa rajadas de eventos
 }

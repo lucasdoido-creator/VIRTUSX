@@ -66,8 +66,18 @@ def world(actor: Principal):
     scope = actor.partner_scope()
     regions = R.db.all("SELECT code,name,currency,locale,timezone,sales_enabled,sales_status_note,tax_status_note,seller_entity FROM regions")
     partners = R.db.all("SELECT * FROM partners" + (" WHERE id=?" if scope else "") + " ORDER BY region_code, name", *([scope] if scope else []))
+    since = iso(now() - timedelta(days=30)); tsn = iso()
+    ops_by_unit = {r["unit_id"]: r for r in R.db.all(
+        "SELECT unit_id, SUM(status NOT IN ('concluida','cancelada')) abertas,"
+        " SUM(status NOT IN ('concluida','cancelada') AND due_at IS NOT NULL AND due_at<?) atrasadas,"
+        " SUM(status='concluida' AND completed_at>=?) feitas_30d, MAX(CASE WHEN status='concluida' THEN completed_at END) ultima"
+        " FROM tasks WHERE unit_id IS NOT NULL GROUP BY unit_id", tsn, since)}
     for p in partners:
         p["units"] = R.db.all("SELECT * FROM partner_units WHERE partner_id=?", p["id"])
+        for u in p["units"]:   # operações realizadas e em aberto por unidade (aparece no mapa)
+            o = ops_by_unit.get(u["id"]) or {}
+            u["ops"] = {"abertas": o.get("abertas") or 0, "atrasadas": o.get("atrasadas") or 0,
+                        "feitas_30d": o.get("feitas_30d") or 0, "ultima": o.get("ultima")}
         p["status"] = building_status(p["id"])
         p["open_orders"] = R.db.val("SELECT COUNT(*) FROM orders WHERE partner_id=? AND status IN ('aguardando_pagamento','pago')", p["id"])
         p["storefronts"] = R.db.all("SELECT id,slug,title,published FROM storefronts WHERE partner_id=?", p["id"])

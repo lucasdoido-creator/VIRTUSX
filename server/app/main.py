@@ -22,7 +22,7 @@ from .config import ROOT, load_settings
 from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, hash_token, new_token, verify_password
 from .db import DB, iso, loads, now
 from datetime import timedelta
-from . import agents, brain, ceo, channels, closings, commands, commerce, ops, policies, registry, seed, tasks
+from . import agents, brain, ceo, channels, closings, commands, commerce, ops, policies, registry, saude, seed, tasks
 
 WEB = ROOT / "web"
 # No Windows o registro pode mapear .js para text/plain, o que bloqueia módulos JS no navegador.
@@ -367,7 +367,63 @@ def _geo_states(req, p, b):
     return geo.states(req.query_params.get("country") or "Brazil")
 
 
+def _img(b, mime):
+    return Response(b, media_type=mime, headers={"Cache-Control": "private, max-age=604800"})
+
+
+def _img_unavailable(msg):
+    # 204 (sem conteúdo): "ainda não disponível" é situação normal (sem internet), não erro — a tela usa o mapa escuro
+    return Response(status_code=204, headers={"X-Motivo": msg.encode("ascii", "ignore").decode() or "indisponivel", "Cache-Control": "no-store"})
+
+
+def _geo_img_world(req, p, b):
+    p.require("world.read")
+    from . import geo
+    data = geo.image_world(2048 if req.query_params.get("leve") else 4096)
+    return _img(data, "image/jpeg") if data else _img_unavailable("Imagem de satélite ainda não baixada (o servidor precisa de internet uma vez).")
+
+
+def _geo_img_box(req, p, b):
+    p.require("world.read")
+    from . import geo
+    try:
+        w, s, e, n = (float(x) for x in (req.query_params.get("bbox") or "").split(","))
+        data, box = geo.image_box(w, s, e, n)
+    except ValueError as ex:
+        raise AppError(str(ex) or "bbox inválido", "bbox_invalido")
+    except Exception:
+        return _img_unavailable("Imagem da região indisponível agora.")
+    r = _img(data, "image/jpeg"); r.headers["X-Bbox"] = ",".join(str(v) for v in box); return r
+
+
+def _geo_tile(req, p, b):
+    p.require("world.read")
+    from . import geo
+    pp = req.path_params
+    try:
+        return _img(geo.tile(pp["z"], pp["x"], pp["y"]), "image/png")
+    except ValueError as ex:
+        raise AppError(str(ex), "tile_invalido")
+    except Exception:
+        return _img_unavailable("Mapa de ruas indisponível agora.")
+
+
 def _channels(req, p, b): return channels.channels_overview(p)
+def _saude(req, p, b): return saude.overview(p, bool(req.query_params.get("agora")))
+def _saude_resolver(req, p, b): return saude.resolve_client_errors(p)
+
+
+@endpoint
+async def client_error(req):
+    """Erros de JavaScript da tela (inclusive antes do login). Limitado e sem dados pessoais."""
+    if req.headers.get("x-requested-with") != "plataforma":
+        raise Forbidden("Cabeçalho anti-CSRF ausente", "csrf")
+    try:
+        p = principal(req)
+    except AppError:
+        p = None
+    b = await body(req)
+    return ok(await run_in_threadpool(saude.report_client_error, p, b if isinstance(b, dict) else {}, req.headers.get("user-agent", "")))
 def _channel_new(req, p, b): return {"id": channels.create_channel(p, b.get("name"), b.get("base_id"))}
 def _contact_new(req, p, b): return {"id": channels.save_contact(p, b.get("partner_id"), b.get("name") or "", b.get("phone"), b.get("role"))}
 def _convs(req, p, b): return channels.list_conversations(p, qp(req, "partner_id"), qp(req, "status"))
@@ -429,7 +485,7 @@ async def stream(req: Request):
                 yield f"id: {r['id']}\nevent: evento\ndata: {json.dumps(r, ensure_ascii=False)}\n\n"
             if time.time() - last_ping > 10:
                 last_ping = time.time()
-                yield f"event: ping\ndata: {json.dumps({'at': iso(), 'last_id': after, 'scheduler': SCHED['last_tick']})}\n\n"
+                yield f"event: ping\ndata: {json.dumps({'at': iso(), 'last_id': after, 'scheduler': SCHED['last_tick'], 'build': saude.BUILD})}\n\n"
             await asyncio.sleep(1.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -437,6 +493,7 @@ async def stream(req: Request):
 
 async def health(req):
     return JSONResponse({"ok": True, "environment": R.settings.env, "time": iso(), "scheduler": SCHED,
+                         "build": saude.BUILD, "started_at": saude.STARTED_AT, "saude": saude.summary(),
                          "integrations": {"stripe": "configurado" if R.settings.stripe_secret_key else "pendente",
                                           "llm": "configurado" if R.settings.anthropic_api_key else "pendente",
                                           "pagamentos_demo": R.settings.is_demo},
@@ -454,11 +511,14 @@ async def store_page(req):
 class SecurityHeaders(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         resp = await call_next(request)
-        resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
                                                    "script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "same-origin"
         resp.headers["X-Environment"] = R.settings.env
+        path = request.url.path
+        if path == "/" or path.startswith("/static/") or path.startswith("/loja/"):
+            resp.headers["Cache-Control"] = "no-cache"   # navegador sempre confere se há versão nova (ETag)
         return resp
 
 
@@ -474,6 +534,10 @@ def tick():
             SCHED["last_error"] = f"{fn.__name__}: {e}"
     SCHED["last_tick"] = iso()
     SCHED["ticks"] += 1
+    try:
+        saude.routine()
+    except Exception as e:
+        SCHED["last_error"] = f"saude: {e}"
 
 
 def _scheduler_loop(stop: threading.Event):
@@ -545,6 +609,10 @@ def create_app(**overrides):
         Route("/api/conversations/{id}/link", P(_conv_link), methods=["POST"]), Route("/api/demo/whatsapp-inbound", P(_wa_sim), methods=["POST"]),
         Route("/api/commands/parse", P(_cmd_parse), methods=["POST"]), Route("/api/commands/execute", P(_cmd_exec), methods=["POST"]),
         Route("/api/geo/countries", P(_geo_countries)), Route("/api/geo/states", P(_geo_states)),
+        Route("/api/saude", P(_saude)), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
+        Route("/api/saude/erro-tela", client_error, methods=["POST"]),
+        Route("/api/geo/imagem/mundo", P(_geo_img_world)), Route("/api/geo/imagem/regiao", P(_geo_img_box)),
+        Route("/api/geo/tile/{z:int}/{x:int}/{y:int}", P(_geo_tile)),
         Route("/api/cadastros", P(_reg)),
         Route("/api/cadastros/bases", P(_reg_base), methods=["POST"]), Route("/api/cadastros/bases/{id}", P(_reg_base), methods=["PUT"]),
         Route("/api/cadastros/clientes", P(_reg_client), methods=["POST"]), Route("/api/cadastros/clientes/{id}", P(_reg_client), methods=["PUT"]),

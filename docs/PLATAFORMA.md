@@ -195,6 +195,17 @@ No demo, há um botão para **simular** mensagens recebidas; respostas aparecem 
 
 Regras da Meta respeitadas: respostas livres só até **24 h** após a última mensagem do cliente; fora disso exige *modelo aprovado* (ainda **não implementado** — o sistema bloqueia e avisa). A Meta cobra por conversas iniciadas pela empresa; respostas dentro da janela de atendimento costumam ser gratuitas — confira a tabela vigente da Meta.
 
+## 7.4 Vigia automático (sem falhas silenciosas)
+
+- **Supervisor** (`server/rodar.py`, usado pelos `iniciar*.bat`): quando arquivos novos são salvos no disco, o servidor termina o que está fazendo e **reinicia sozinho com a versão nova**; se cair por erro, volta sozinho (espera 2 s → 60 s). Registro em `data/logs/supervisor.log`. Isso evita a falha "tela nova com servidor antigo" (ex.: *reading 'lat'* no 3D).
+- **Tela sempre atualizada**: o navegador revalida os arquivos a cada abertura; se o servidor mudou de versão, aparece "Nova versão instalada" e a tela recarrega sozinha (sem perder o que está sendo digitado).
+- **Erros da tela** (JavaScript) são enviados automaticamente ao servidor, agrupados e mostrados em **Saúde** (sem dados pessoais). Um item com dado ruim não derruba o mapa: é pulado e registrado.
+- **Verificações a cada 5 min** (botão **Saúde** no cabeçalho): banco íntegro, agendador, versão em execução × disco, mapa e satélite, IA local, WhatsApp, webhooks na fila de falhas, agentes, erros de tela, cópia de segurança e espaço em disco. Vermelho gera evento `sistema.alerta` e **uma** pendência crítica para a central; ao normalizar, evento `sistema.normalizado`.
+- **Cópia de segurança diária** consistente (com o sistema rodando) em `data/backups`, verificada (`quick_check`) e com 14 cópias guardadas. Para restaurar: feche o servidor e copie a cópia desejada sobre `data/plataforma_<ambiente>.sqlite3`.
+- **Testes automáticos** (CI a cada envio ao GitHub): os 3 testes de navegador falham se o vigia registrar qualquer erro de tela; no CI o mapa real e a imagem de satélite precisam baixar de verdade.
+
+**Mapa realista**: imagem de satélite NASA Blue Marble (domínio público, via NASA GIBS) no mundo inteiro; ao aproximar, imagem mais nítida só da área vista; opção **Ruas** (OpenStreetMap, com cache em disco e sem download em massa) e **Escuro** (vetorial). Unidades mostram colunas de operações: verde = feitas em 30 dias, âmbar/vermelho = abertas/atrasadas; tarefas criadas/concluídas geram pulso da base até a unidade.
+
 ## 8. Como executar e acessar
 
 **Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
@@ -214,7 +225,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **75 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **87 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

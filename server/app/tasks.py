@@ -118,7 +118,7 @@ def create_task(c, actor: Principal, data: dict, depends_on=()):
     audit(c, actor, "tarefa.criada", "task", tid, None, {"title": row["title"], "status": row["status"]}, row["partner_id"])
     emit(c, "pendencia.criada" if row["kind"] == "pendencia" else "tarefa.criada", "tarefas", "task", tid,
          row["partner_id"], None, None, row["status"],
-         payload={"title": row["title"], "kind": row["kind"], "priority": row["priority"],
+         payload={"title": row["title"], "kind": row["kind"], "priority": row["priority"], "unit_id": row["unit_id"],
                   "assignee_type": row["assignee_type"], "assignee_id": row["assignee_id"]})
     return tid
 
@@ -223,7 +223,7 @@ def update_task(c, actor: Principal, task_id, changes: dict, note=None, force=Fa
     audit(c, actor, "tarefa.atualizada", "task", task_id, {k: t.get(k) for k in changes}, changes, t["partner_id"])
     emit(c, "tarefa.atualizada", "tarefas", "task", task_id, t["partner_id"], None, None,
          changes.get("status", t["status"]),
-         payload={"title": t["title"], "kind": t["kind"], "changes": sorted(changes), "assignee_type": merged["assignee_type"],
+         payload={"title": t["title"], "kind": t["kind"], "changes": sorted(changes), "unit_id": t.get("unit_id"), "assignee_type": merged["assignee_type"],
                   "assignee_id": merged["assignee_id"]})
     return merged
 
