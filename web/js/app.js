@@ -163,12 +163,12 @@ async function refresh(auto = false) {  // auto = disparado por evento: não apa
   try {
     if (S.me.role === "tecnico") {  // técnico não tem visão do mundo: só recarrega a tarefa e a lista
       if (S.panel && S.panel.reload && !busy("#pBody")) S.panel.reload();
-      return busy("#tBody") ? null : renderTables(true);
+      return busy("#tBody") ? null : renderTables(true, auto);
     }
     S.world = await api("/api/world"); updateHeader();
     if (S.w) S.w.build(S.world);
     if (S.panel && S.panel.reload && !busy("#pBody")) S.panel.reload();
-    if (S.view === "tabelas" && !busy("#tBody")) renderTables(true);
+    if (S.view === "tabelas" && !busy("#tBody")) renderTables(true, auto);
   } catch (e) { if (e.status === 401) location.reload(); }
 }
 // Nunca redesenhar por cima do que a pessoa está digitando (cadastro, resposta de WhatsApp…):
@@ -556,7 +556,12 @@ async function openSector(code) {
 // ------------------------------------------------------------------ modo tabelas
 const TABLE_TABS = [["quadro", "Quadro de tarefas"], ["atendimento", "Atendimento"], ["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
   ["aprovacoes", "Aprovações"], ["estoque", "Estoque"], ["eventos", "Eventos"], ["webhooks", "Webhooks"], ["auditoria", "Auditoria"], ["politicas", "Políticas"]];
-async function renderTables(soft) {
+async function renderTables(soft, auto = false) {
+  // Só a chamada mais recente desenha (uma resposta lenta e antiga nunca cobre dados novos);
+  // atualização automática desiste se a pessoa começou a digitar enquanto os dados chegavam.
+  const seq = S.tSeq = (S.tSeq || 0) + 1, STALE = { stale: true };
+  const fresh = () => seq === S.tSeq && !(auto && editing("#tBody"));
+  const get = async (url, opts) => { const d = await api(url, opts); if (!fresh()) throw STALE; return d; };
   const tabs = S.me.role === "tecnico" ? [["tarefas", "Minhas tarefas"]] :
     TABLE_TABS.filter(([k]) => (k === "atendimento" ? can("atendimento.read") : (S.me.is_central && (k !== "cadastros" || can("cadastros.read")))
       || ["quadro", "visao", "pedidos", "tarefas", "agentes", "fechamentos", "eventos"].includes(k)));
@@ -573,49 +578,51 @@ async function renderTables(soft) {
     if (onClick) body.querySelectorAll("tr[data-i]").forEach(tr => tr.onclick = () => onClick(rows[+tr.dataset.i]));
   };
   try {
-    if (S.tab === "cadastros") return renderCadastros(body);
-    if (S.tab === "quadro") return renderKanban(body);
-    if (S.tab === "atendimento") return renderInbox(body);
+    if (S.tab === "cadastros") return renderCadastros(body, fresh);
+    if (S.tab === "quadro") return renderKanban(body, fresh);
+    if (S.tab === "atendimento") return renderInbox(body, fresh);
     if (S.tab === "visao") grid([["name", "Parceiro"], ["region", "Região"], ["status", "Sinalização", r => st(r.status)], ["model", "Modelo"], ["overdue_tasks", "Tarefas atrasadas"],
       ["pending_closings", "Fechamentos pendentes"], ["failed_integrations", "Integrações com falha"], ["sales", "Vendas confirmadas"], ["is_demo", "Ambiente", r => r.is_demo ? badge("demo", "sim") : ""]],
-      await api("/api/overview"), r => select("partner", r.id));
+      await get("/api/overview"), r => select("partner", r.id));
     if (S.tab === "pedidos") grid([["code", "Código", r => `<span class="mono">${esc(r.code)}</span>`], ["status", "Status", r => esc(ORDER_STATES[r.status] || r.status)], ["partner_id", "Parceiro"],
       ["region_code", "Região"], ["total_minor", "Total", r => fmtMoney(r.total_minor, r.currency)], ["customer_name", "Cliente"], ["created_at", "Criado", r => fmtTime(r.created_at)]],
-      await api("/api/orders"), r => openOrder(r.id));
+      await get("/api/orders"), r => openOrder(r.id));
     if (S.tab === "tarefas") grid([["title", "Título", r => esc(r.title) + (r.overdue ? " " + badge("atrasada", "bad") : "")], ["kind", "Tipo"], ["status", "Status", r => esc(TASK_STATES[r.status])],
-      ["priority", "Prioridade"], ["partner_id", "Cliente/parceiro"], ["assignee_name", "Responsável"], ["due_at", "Prazo", r => fmtTime(r.due_at)]], await api("/api/tasks"), r => openTask(r.id));
+      ["priority", "Prioridade"], ["partner_id", "Cliente/parceiro"], ["assignee_name", "Responsável"], ["due_at", "Prazo", r => fmtTime(r.due_at)]], await get("/api/tasks"), r => openTask(r.id));
     if (S.tab === "agentes") grid([["name", "Agente"], ["role", "Função"], ["status", "Status", r => badge(AGENT_LABEL[r.status] || r.status)], ["status_since", "Desde", r => fmtTime(r.status_since)],
       ["current_task", "Tarefa atual", r => esc(r.current_task ? r.current_task.title : "—")], ["last_confirmed_at", "Última confirmação", r => fmtTime(r.last_confirmed_at)],
       ["last_run", "Último resultado", r => esc(r.last_run ? r.last_run.summary : "—")], ["month_spend_minor", "Custo mês", r => fmtMoney(r.month_spend_minor, r.budget_currency)]],
-      await api("/api/agents"), r => openAgent(r.id));
-    if (S.tab === "fechamentos") { const rows = await api("/api/closings"); body.innerHTML = rows.map(closingCard).join("") || `<p class="muted">Nenhum.</p>`; bindClosingActions(body); }
-    if (S.tab === "aprovacoes") { const rows = await api("/api/approvals"); body.innerHTML = approvalsHtml(rows) + `<h4>Histórico</h4>`;
+      await get("/api/agents"), r => openAgent(r.id));
+    if (S.tab === "fechamentos") { const rows = await get("/api/closings"); body.innerHTML = rows.map(closingCard).join("") || `<p class="muted">Nenhum.</p>`; bindClosingActions(body); }
+    if (S.tab === "aprovacoes") { const rows = await get("/api/approvals"); body.innerHTML = approvalsHtml(rows) + `<h4>Histórico</h4>`;
       const hist = document.createElement("div"); body.appendChild(hist); bindApprovals(body);
       hist.innerHTML = `<table class="t"><tbody>${rows.filter(r => r.status !== "aguardando_aprovacao").map(r => `<tr><td>${esc(r.action)}</td><td>${badge(r.status)}</td><td>${esc(r.decided_by || "")}</td><td>${fmtTime(r.created_at)}</td><td class="mono">${esc(JSON.stringify(r.effects || ""))}</td></tr>`).join("")}</tbody></table>`; }
     if (S.tab === "estoque") grid([["region_code", "Região"], ["warehouse", "Armazém"], ["sku", "SKU"], ["product", "Produto"], ["on_hand", "Saldo"], ["reserved", "Reservado"],
-      ["available", "Disponível", r => r.available < r.reorder_point ? `<b style="color:var(--warn)">${r.available}</b>` : r.available], ["reorder_point", "Ponto"]], await api("/api/inventory"));
+      ["available", "Disponível", r => r.available < r.reorder_point ? `<b style="color:var(--warn)">${r.available}</b>` : r.available], ["reorder_point", "Ponto"]], await get("/api/inventory"));
     if (S.tab === "eventos") grid([["id", "#"], ["type", "Tipo"], ["status", "Status"], ["source", "Origem"], ["entity_type", "Entidade", r => `${esc(r.entity_type || "")} <span class="mono">${esc(r.entity_id || "")}</span>`],
       ["correlation_id", "Correlação", r => `<span class="mono">${esc(r.correlation_id || "")}</span>`], ["occurred_at", "Ocorrido", r => fmtTime(r.occurred_at)], ["received_at", "Recebido", r => fmtTime(r.received_at)]],
-      (await api("/api/events?after=0&limit=1000")).events.reverse());
+      (await get("/api/events?after=0&limit=1000")).events.reverse());
     if (S.tab === "webhooks") grid([["event_type", "Evento"], ["status", "Status"], ["attempts", "Tentativas"], ["occurred_at", "Ocorrido", r => fmtTime(r.occurred_at)], ["received_at", "Recebido", r => fmtTime(r.received_at)],
       ["last_error", "Erro"], ["id", "Ações", r => `${r.status === "dead_letter" ? `<button class="btn small" data-rq="${r.id}">Reprocessar</button>` : ""}${S.me.environment === "demo" ? ` <button class="btn small" data-rp="${r.id}" title="Reenvia o mesmo evento para testar duplicidade">Reenviar (teste)</button>` : ""}`]],
-      await api("/api/webhooks/inbox"));
+      await get("/api/webhooks/inbox"));
     if (S.tab === "auditoria") grid([["id", "#"], ["at", "Quando", r => fmtTime(r.at)], ["actor_type", "Ator", r => `${esc(r.actor_type)}:${esc(r.actor_id)}`], ["action", "Ação"],
-      ["entity_type", "Entidade", r => `${esc(r.entity_type || "")} <span class="mono">${esc(r.entity_id || "")}</span>`], ["after_json", "Depois", r => `<span class="mono">${esc((r.after_json || "").slice(0, 120))}</span>`]], await api("/api/audit"));
-    if (S.tab === "politicas") { const d = await api("/api/policies");
+      ["entity_type", "Entidade", r => `${esc(r.entity_type || "")} <span class="mono">${esc(r.entity_id || "")}</span>`], ["after_json", "Depois", r => `<span class="mono">${esc((r.after_json || "").slice(0, 120))}</span>`]], await get("/api/audit"));
+    if (S.tab === "politicas") { const d = await get("/api/policies");
       body.innerHTML = `<p class="muted">Sem política cadastrada, a ação é preparada para revisão — nunca executada.</p><table class="t"><thead><tr><th>Ação</th><th>Modo</th><th>Limite</th><th>Aprovador</th><th>Descrição</th></tr></thead><tbody>
       ${d.policies.map(p => `<tr><td class="mono">${esc(p.action)}</td><td>${badge(p.mode)}</td><td>${p.limit_minor != null ? fmtMoney(p.limit_minor, p.currency) : "—"}</td><td>${esc(p.approver_role || "—")}</td><td>${esc(p.description || "")}</td></tr>`).join("")}
       ${d.actions_without_policy.map(a => `<tr><td class="mono">${esc(a.action)}</td><td>${badge("sem política → revisão", "warn")}</td><td>—</td><td>—</td><td>${esc(a.description)}</td></tr>`).join("")}</tbody></table>`; }
     body.querySelectorAll("[data-rq]").forEach(b => b.onclick = e => { e.stopPropagation(); act(() => api(`/api/webhooks/inbox/${b.dataset.rq}/requeue`, { method: "POST" }), "Reprocessado"); });
     body.querySelectorAll("[data-rp]").forEach(b => b.onclick = async e => { e.stopPropagation(); const r = await act(() => api("/api/demo/replay-webhook", { method: "POST", body: { inbox_id: b.dataset.rp } })); toast("Resultado: " + r.status); });
-  } catch (e) { body.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+  } catch (e) { if (e === STALE) return; if (!e.status && !/fetch|network|load failed/i.test(e.message) && window.__vigia) window.__vigia(e.message, "", 0, e.stack, "tabela:" + S.tab);  // erro de programa (não de regra de negócio) vai para o vigia
+    body.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
 }
 
 // ------------------------------------------------------------------ cadastros (operação real)
 const ROLE_LABEL = { admin_central: "Administrador", operacoes_central: "Operações", financeiro_central: "Financeiro",
   parceiro_admin: "Cliente (gestor)", parceiro_operador: "Cliente (operador)", tecnico: "Técnico / freelancer" };
-async function renderCadastros(body) {
+async function renderCadastros(body, fresh) {
   const [d, chs] = await Promise.all([api("/api/cadastros"), can("atendimento.read") ? api("/api/channels").catch(() => ({ contacts: [] })) : { contacts: [] }]);
+  if (fresh && !fresh()) return;
   const w = can("cadastros.write");
   const opt = (arr, sel, lbl) => arr.map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(lbl(x))}</option>`).join("");
   const pend = d.users.filter(u => u.role === "tecnico" && !u.active);
@@ -777,8 +784,8 @@ function runOpen(q) {
 }
 
 // ------------------------------------------------------------------ quadro de tarefas (arrastar entre colunas)
-async function renderKanban(body) {
-  const tasks = await api("/api/tasks"); const q = ($("#tFilter").value || "").toLowerCase();
+async function renderKanban(body, fresh) {
+  const tasks = await api("/api/tasks"); if (fresh && !fresh()) return; const q = ($("#tFilter").value || "").toLowerCase();
   const cols = ["a_fazer", "em_andamento", "aguardando_terceiro", "aguardando_aprovacao", "concluida", "cancelada"];
   const partners = Object.fromEntries((S.world.partners || []).map(p => [p.id, p.name]));
   const list = tasks.filter(t => !q || (t.title + " " + (t.assignee_name || "") + " " + (partners[t.partner_id] || "")).toLowerCase().includes(q));
@@ -807,8 +814,9 @@ async function updateUnread() {
   try { const cs = await api("/api/conversations"); const n = cs.reduce((a, c) => a + (c.unread || 0), 0);
     const el = $("#unread"); el.textContent = n; el.classList.toggle("hidden", !n); el.classList.toggle("ok", !!n); } catch {}
 }
-async function renderInbox(body) {
+async function renderInbox(body, fresh) {
   const [ov, convs] = await Promise.all([api("/api/channels"), api("/api/conversations")]);
+  if (fresh && !fresh()) return;
   const sel = S.convSel && convs.find(c => c.id === S.convSel) ? S.convSel : (convs[0] && convs[0].id);
   const wa = ov.whatsapp;
   body.innerHTML = `<div class="card" style="margin-top:10px"><b>WhatsApp Business</b> ${wa.configured ? badge("conectado à API oficial", "ok")
