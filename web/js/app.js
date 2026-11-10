@@ -89,7 +89,7 @@ async function start() {
   updateHeader();
   if (can("sistema.saude")) { $("#saudeBtn").classList.remove("hidden"); $("#saudeBtn").onclick = openSaude; updateSaude(); setInterval(updateSaude, 60000); }
   S.live = new Live({ onEvent, onState: liveState, onPing: d => { if (d.build && S.build && d.build !== S.build) newVersion(); },
-    onResync: () => { toast("Conexão restabelecida — dados sincronizados"); refresh(); } });
+    onResync: () => { toast("Conexão restabelecida — dados sincronizados"); refresh(true); } });
   S.live.start(S.world.last_event_id);
 }
 
@@ -149,7 +149,7 @@ function onEvent(ev) {
   if (S.w) S.w.pulseFor(ev);
   if (ev.type.startsWith("sistema.") && can("sistema.saude")) { updateSaude(); if (ev.type === "sistema.alerta") toast("Alerta do sistema: " + ((ev.payload || {}).verificacao || ""), true); }
   if (ev.type.startsWith("whatsapp") || ev.type.startsWith("canal")) { updateUnread(); if (S.view === "tabelas" && S.tab === "atendimento") renderTables(true); }
-  if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; refresh(); }, 800); // agrupa rajadas de eventos
+  if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; refresh(true); }, 800); // agrupa rajadas de eventos
 }
 function liveState(s, lostAt) {
   const p = $("#live"); p.className = "pill " + ({ ao_vivo: "live", reconectando: "late", atrasado: "late", desconectado: "off" }[s] || "");
@@ -158,17 +158,26 @@ function liveState(s, lostAt) {
     atrasado: "Dados atrasados" + since, desconectado: "Sem conexão" + since }[s];
   document.body.classList.toggle("stale", s !== "ao_vivo");
 }
-async function refresh() {
+async function refresh(auto = false) {  // auto = disparado por evento: não apaga o que está sendo digitado
+  const busy = sel => auto && editing(sel);
   try {
     if (S.me.role === "tecnico") {  // técnico não tem visão do mundo: só recarrega a tarefa e a lista
-      if (S.panel && S.panel.reload) S.panel.reload();
-      return renderTables(true);
+      if (S.panel && S.panel.reload && !busy("#pBody")) S.panel.reload();
+      return busy("#tBody") ? null : renderTables(true);
     }
     S.world = await api("/api/world"); updateHeader();
     if (S.w) S.w.build(S.world);
-    if (S.panel && S.panel.reload) S.panel.reload();
-    if (S.view === "tabelas") renderTables(true);
+    if (S.panel && S.panel.reload && !busy("#pBody")) S.panel.reload();
+    if (S.view === "tabelas" && !busy("#tBody")) renderTables(true);
   } catch (e) { if (e.status === 401) location.reload(); }
+}
+// Nunca redesenhar por cima do que a pessoa está digitando (cadastro, resposta de WhatsApp…):
+// a área espera e é atualizada no próximo evento depois que o formulário for enviado ou limpo.
+function editing(sel) {
+  const box = $(sel); if (!box) return false;
+  const a = document.activeElement;
+  if (a && box.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== "checkbox") return true;
+  return [...box.querySelectorAll("form input, form textarea")].some(i => !["checkbox", "hidden", "file", "radio"].includes(i.type) && i.value !== i.defaultValue);
 }
 
 // ------------------------------------------------------------------ navegação
