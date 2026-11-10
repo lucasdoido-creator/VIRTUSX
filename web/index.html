@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Centro de Operações</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="icon" href="data:,">
+</head>
+<body>
+<div id="envbar" class="envbar" role="status">Carregando ambiente…</div>
+
+<section id="login" class="login hidden">
+  <div class="box">
+    <h1>VIRTUSX</h1>
+    <p class="muted">Acesso da central e dos parceiros.</p>
+    <form class="f">
+      <label>E-mail<input name="email" type="email" required autocomplete="username"></label>
+      <label>Senha<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="btn primary">Entrar</button>
+      <div id="loginErr" class="muted" role="alert"></div>
+    </form>
+    <details class="card"><summary>Contas de demonstração (senha demo1234)</summary>
+      <div class="row" style="margin-top:6px">
+        <button class="btn small" data-demo="admin@central.demo">Admin central</button>
+        <button class="btn small" data-demo="ops@central.demo">Operações</button>
+        <button class="btn small" data-demo="financeiro@central.demo">Financeiro</button>
+        <button class="btn small" data-demo="marina@aurora.demo">Parceiro BR (Casa Aurora)</button>
+        <button class="btn small" data-demo="joao@lisboa.demo">Parceiro PT</button>
+      </div>
+    </details>
+  </div>
+</section>
+
+<div id="app" class="app hidden">
+  <header class="top">
+    <div class="brand"><i aria-hidden="true"></i><span>VIRTUSX · Central de Operações</span></div>
+    <div id="live" class="pill" aria-live="polite"><i class="dot"></i><span>Conectando…</span></div>
+    <div class="search" id="search"><input id="q" type="search" placeholder="Buscar país, cidade, parceiro, unidade, agente, pedido…" aria-label="Buscar"><div id="qres" class="results hidden" role="listbox"></div></div>
+    <div class="seg" id="viewSeg" role="group" aria-label="Modo de visualização">
+      <button data-view="3d" aria-pressed="true">Cidade 3D</button><button data-view="tabelas" aria-pressed="false">Tabelas</button>
+    </div>
+    <div class="spacer"></div>
+    <span id="pausedNote" class="badge bad hidden">Agentes pausados</span>
+    <label class="tog hidden" id="pauseWrap"><input type="checkbox" id="pause"> Pausa global dos agentes</label>
+    <label class="tog"><input type="checkbox" id="reduce"> Reduzir animações</label>
+    <label class="tog"><input type="checkbox" id="lite"> Modo leve</label>
+    <span id="who" class="muted" style="white-space:nowrap"></span>
+    <button class="btn small" id="logout">Sair</button>
+  </header>
+  <main>
+    <div id="stageWrap">
+      <div id="stage"><canvas id="gl" tabindex="0" aria-label="Cidade operacional em 3D. Todas as informações também estão no modo Tabelas."></canvas></div>
+      <div id="labels"></div>
+      <nav class="crumbs" id="crumbs" aria-label="Navegação"></nav>
+      <div class="filters" id="filters" aria-label="Filtros"></div>
+      <div class="legend" id="legend">
+        <div class="row"><span class="st verde"><i></i>sem pendências críticas</span><span class="st amarelo"><i></i>atenção</span><span class="st vermelho"><i></i>crítico</span><span class="st cinza"><i></i>sem dados</span></div>
+        <div class="note">Arraste para girar · botão direito/Shift para mover · roda para aproximar. Posições são ilustrativas; pulsos e movimentos de avatares só ocorrem com eventos reais do servidor.</div>
+      </div>
+    </div>
+    <section id="tables" class="tables hidden">
+      <div class="tbar"><div class="tabs" id="tTabs" role="tablist" style="border:0;padding:0"></div><div class="spacer"></div><input id="tFilter" class="btn" placeholder="Filtrar tabela…" aria-label="Filtrar tabela"></div>
+      <div class="tbody" id="tBody"></div>
+    </section>
+    <aside id="panel" class="panel hidden" aria-hidden="true" role="dialog" aria-labelledby="pTitle">
+      <header><div style="flex:1"><h2 id="pTitle"></h2><div class="sub" id="pSub"></div></div><button class="btn small" id="closePanel" aria-label="Fechar painel">✕</button></header>
+      <div class="tabs" id="pTabs" role="tablist"></div>
+      <div class="body" id="pBody"></div>
+    </aside>
+  </main>
+  <footer class="ticker" id="ticker" aria-live="off"><span>Aguardando eventos…</span></footer>
+</div>
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Correção assistida por IA — OPCIONAL e sob demanda (só roda quando alguém escreve "@claude"
+# numa issue ou PR). Consome créditos da API: requer o segredo ANTHROPIC_API_KEY no repositório.
+# Sem o segredo, nada executa. A IA abre PR com a correção; o CI testa antes de você aprovar.
+name: Claude (sob demanda)
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  claude:
+    if: contains(github.event.comment.body || github.event.issue.body || '', '@claude')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}

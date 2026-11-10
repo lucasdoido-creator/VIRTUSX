@@ -1,0 +1,3 @@
+Coloque aqui gsap.min.js (GSAP 3.x, https://gsap.com) para que as transições usem GSAP.
+Sem o arquivo, web/js/anim.js usa um interpolador local equivalente (mesma API: to/duration/ease/onUpdate).
+O servidor detecta o arquivo automaticamente (/api/health → vendor.gsap).

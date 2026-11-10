@@ -1,0 +1,6 @@
+data/
+__pycache__/
+.pytest_cache/
+scripts/node_modules/
+scripts/package*.json
+*.sqlite3*

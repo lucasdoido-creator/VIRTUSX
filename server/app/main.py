@@ -1,0 +1,459 @@
+"""API HTTP (Starlette), stream de eventos (SSE) e agendador do servidor."""
+from __future__ import annotations
+
+import asyncio
+import mimetypes
+import base64
+import json
+import threading
+import time
+from contextlib import asynccontextmanager
+
+from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
+
+from .config import ROOT, load_settings
+from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, hash_token, new_token, verify_password
+from .db import DB, iso, loads, now
+from datetime import timedelta
+from . import agents, closings, commerce, ops, policies, seed, tasks
+
+WEB = ROOT / "web"
+# No Windows o registro pode mapear .js para text/plain, o que bloqueia módulos JS no navegador.
+for _ext, _mime in ((".js", "text/javascript"), (".mjs", "text/javascript"), (".css", "text/css"), (".html", "text/html"),
+                    (".svg", "image/svg+xml"), (".json", "application/json")):
+    mimetypes.add_type(_mime, _ext)
+SCHED = {"last_tick": None, "last_error": None, "ticks": 0}
+
+
+# ------------------------------------------------------------------ utilidades
+def principal(req: Request) -> Principal:
+    tok = req.cookies.get("sessao")
+    if not tok:
+        raise AppError("Autenticação necessária", "nao_autenticado", 401)
+    s = R.db.one("SELECT s.*, u.email, u.name, u.role, u.partner_id, u.active FROM sessions s JOIN users u ON u.id=s.user_id WHERE token_hash=?",
+                 hash_token(tok))
+    if not s or not s["active"] or s["expires_at"] < iso():
+        raise AppError("Sessão expirada", "nao_autenticado", 401)
+    return Principal("user", s["user_id"], s["role"], s["partner_id"], s["name"])
+
+
+async def body(req: Request):
+    try:
+        raw = await req.body()
+        return json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        raise AppError("JSON inválido")
+
+
+def ok(data=None, status=200):
+    return JSONResponse({"ok": True, "data": data}, status_code=status)
+
+
+def endpoint(fn):
+    async def wrapper(req: Request):
+        try:
+            return await fn(req)
+        except AppError as e:
+            return JSONResponse({"ok": False, "error": e.code, "message": e.message, **({"extra": e.extra} if e.extra else {})},
+                                status_code=e.status)
+    return wrapper
+
+
+def T(fn, *a, **kw):
+    return run_in_threadpool(fn, *a, **kw)
+
+
+# ------------------------------------------------------------------ autenticação
+@endpoint
+async def login(req):
+    b = await body(req)
+    u = R.db.one("SELECT * FROM users WHERE email=? AND active=1", (b.get("email") or "").strip().lower())
+    if not u or not verify_password(b.get("password") or "", u["password_hash"]):
+        await asyncio.sleep(0.3)
+        raise AppError("E-mail ou senha inválidos", "credenciais_invalidas", 401)
+    tok = new_token()
+    with R.db.tx() as c:
+        c.execute("INSERT INTO sessions(token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)",
+                  (hash_token(tok), u["id"], iso(), iso(now() + timedelta(hours=R.settings.session_hours))))
+        audit(c, Principal("user", u["id"], u["role"], u["partner_id"]), "sessao.login", "user", u["id"])
+    r = ok({"id": u["id"], "name": u["name"], "role": u["role"], "partner_id": u["partner_id"]})
+    r.set_cookie("sessao", tok, httponly=True, samesite="strict", secure=not R.settings.is_demo, max_age=R.settings.session_hours * 3600)
+    return r
+
+
+@endpoint
+async def logout(req):
+    tok = req.cookies.get("sessao")
+    if tok:
+        with R.db.tx() as c:
+            c.execute("DELETE FROM sessions WHERE token_hash=?", (hash_token(tok),))
+    r = ok()
+    r.delete_cookie("sessao")
+    return r
+
+
+@endpoint
+async def me(req):
+    p = principal(req)
+    from .core import ROLE_PERMS
+    perms = sorted(ROLE_PERMS.get(p.role, set()))
+    partner = R.db.one("SELECT id,name,region_code FROM partners WHERE id=?", p.partner_id) if p.partner_id else None
+    return ok({"id": p.id, "name": p.name, "role": p.role, "partner": partner, "is_central": p.is_central, "permissions": perms,
+               "environment": R.settings.env})
+
+
+# ------------------------------------------------------------------ público (loja)
+@endpoint
+async def store_get(req):
+    return ok(await T(commerce.public_storefront, req.path_params["slug"]))
+
+
+@endpoint
+async def store_checkout(req):
+    b = await body(req)
+    res = await T(commerce.checkout, req.path_params["slug"], b.get("items"), b.get("customer"), b.get("shipping"),
+                  req.headers.get("idempotency-key"))
+    return ok(res, 200 if res["duplicate"] else 201)
+
+
+@endpoint
+async def order_pay(req):
+    b = await body(req)
+    return ok(await T(commerce.pay, req.path_params["code"], b.get("token"), b.get("test_card")))
+
+
+@endpoint
+async def order_public(req):
+    return ok(await T(commerce.public_order, req.path_params["code"], req.query_params.get("token")))
+
+
+@endpoint
+async def webhook(req):
+    raw = await req.body()
+    return ok(await T(commerce.receive_webhook, req.path_params["provider"], raw, dict(req.headers)))
+
+
+# ------------------------------------------------------------------ privado
+def private(fn):
+    @endpoint
+    async def w(req):
+        p = principal(req)
+        if req.method not in ("GET", "HEAD") and req.headers.get("x-requested-with") != "plataforma":
+            raise Forbidden("Cabeçalho anti-CSRF ausente", "csrf")
+        b = await body(req) if req.method in ("POST", "PUT", "PATCH") else {}
+        res = await run_in_threadpool(fn, req, p, b)
+        if isinstance(res, Response):
+            return res
+        return ok(res)
+    return w
+
+
+def qp(req, k):
+    v = req.query_params.get(k)
+    return v if v not in (None, "") else None
+
+
+def _world(req, p, b): return ops.world(p)
+def _overview(req, p, b): return ops.overview(p)
+def _building(req, p, b): return ops.partner_building(p, req.path_params["id"])
+def _orders(req, p, b): return commerce.list_orders(p, qp(req, "partner_id"), qp(req, "status"), qp(req, "q"))
+def _order(req, p, b): return commerce.get_order(p, req.path_params["id"])
+def _ship(req, p, b): return commerce.register_shipment(p, req.path_params["id"])
+def _cancel(req, p, b): return commerce.cancel_order(p, req.path_params["id"], b.get("reason") or "cancelado pela operação")
+def _return(req, p, b): return {"return_id": commerce.create_return(p, req.path_params["id"], b.get("reason") or "devolução")}
+def _receive_return(req, p, b): return commerce.receive_return(p, req.path_params["id"])
+
+
+def _tasks(req, p, b):
+    return tasks.list_tasks(p, qp(req, "partner_id"), qp(req, "status"), qp(req, "assignee_id"), qp(req, "kind"),
+                            qp(req, "overdue") == "1", qp(req, "q"))
+
+
+def _task_create(req, p, b):
+    with R.db.tx() as c:
+        tid = tasks.create_task(c, p, {k: b.get(k) for k in tasks.FIELDS if k in b}, b.get("depends_on") or ())
+    return tasks.get_task(tid, p)
+
+
+def _task_get(req, p, b): return tasks.get_task(req.path_params["id"], p)
+
+
+def _task_patch(req, p, b):
+    with R.db.tx() as c:
+        tasks.update_task(c, p, req.path_params["id"], {k: v for k, v in b.items() if k != "note"}, note=b.get("note"))
+    return tasks.get_task(req.path_params["id"], p)
+
+
+def _task_comment(req, p, b): return {"id": tasks.add_comment(p, req.path_params["id"], b.get("body"))}
+
+
+def _task_attach(req, p, b):
+    try:
+        content = base64.b64decode(b.get("content_base64") or "", validate=True)
+    except Exception:
+        raise AppError("Conteúdo base64 inválido")
+    return {"id": tasks.add_attachment(p, "task", req.path_params["id"], b.get("filename"), b.get("mime"), content, bool(b.get("is_evidence")))}
+
+
+def _attachment(req, p, b):
+    a = R.db.one("SELECT * FROM attachments WHERE id=?", req.path_params["id"])
+    if not a:
+        raise NotFound("Anexo não encontrado")
+    p.require("tasks.read", a["partner_id"])
+    return FileResponse(a["storage_path"], media_type=a["mime"], filename=a["filename"])
+
+
+def _sf_create(req, p, b):
+    return {"id": commerce.create_storefront(p, req.path_params["id"], b.get("slug"), b.get("title") or "", b.get("template") or "vitrine-classica",
+                                             b.get("config"), b.get("product_ids") or [])}
+
+
+def _sf_patch(req, p, b):
+    commerce.update_storefront(p, req.path_params["id"], b.get("title"), b.get("config"), b.get("product_ids"), b.get("published"))
+    return R.db.one("SELECT id,slug,published FROM storefronts WHERE id=?", req.path_params["id"])
+
+
+def _closings(req, p, b): return closings.list_closings(p, qp(req, "partner_id"))
+def _closing_prepare(req, p, b):
+    return {"id": closings.prepare(p, b.get("kind"), b.get("partner_id"), b.get("period_type"), b.get("local_day"), b.get("unit_id"))}
+def _closing_advance(req, p, b): return {"status": closings.advance(p, req.path_params["id"], b.get("note") or "")}
+def _closing_reopen(req, p, b): return {"id": closings.reopen(p, req.path_params["id"], b.get("reason"))}
+def _closing_settle(req, p, b): return {"payout_id": closings.settle(p, req.path_params["id"], b.get("reference"))}
+def _adjust(req, p, b): return {"id": closings.add_adjustment(p, b.get("partner_id"), b.get("order_id"), b.get("amount_minor"), b.get("note"))}
+
+def _agents(req, p, b): return agents.list_agents(p)
+def _agent_runs(req, p, b): return agents.agent_runs(p, req.path_params["id"])
+def _agent_run(req, p, b): return agents.run_agent(req.path_params["code"], "manual", p)
+def _pause(req, p, b):
+    agents.set_paused(p, bool(b.get("paused")))
+    return {"paused": bool(b.get("paused"))}
+
+
+def _approvals(req, p, b):
+    p.require("approvals.read")
+    rows = R.db.all("SELECT * FROM action_requests ORDER BY created_at DESC LIMIT 200")
+    for r in rows:
+        r["payload"] = loads(r.pop("payload_json"))
+        r["effects"] = loads(r.pop("external_effects_json"))
+    return rows
+
+
+def _approve(req, p, b): return policies.decide_request(req.path_params["id"], bool(b.get("approve")), p, b.get("note") or "")
+def _approval_cancel(req, p, b):
+    p.require("approvals.decide")
+    return policies.cancel_request(req.path_params["id"], p)
+
+
+def _policies(req, p, b):
+    p.require("approvals.read")
+    rows = R.db.all("SELECT * FROM policies")
+    known = {r["action"] for r in rows}
+    return {"policies": rows, "actions_without_policy": [{"action": a, "description": d} for a, d in policies.KNOWN_ACTIONS.items() if a not in known]}
+
+
+def _policy_put(req, p, b):
+    policies.upsert_policy(p, req.path_params["action"], b.get("mode"), b.get("limit_minor"), b.get("currency"), b.get("approver_role"))
+    return R.db.one("SELECT * FROM policies WHERE action=?", req.path_params["action"])
+
+
+def events_for(p: Principal, after: int, limit=200):
+    scope = p.partner_scope()
+    if scope:
+        rows = R.db.all("SELECT * FROM events WHERE id>? AND partner_id=? ORDER BY id LIMIT ?", after, scope, limit)
+    else:
+        rows = R.db.all("SELECT * FROM events WHERE id>? ORDER BY id LIMIT ?", after, limit)
+    for r in rows:
+        r["payload"] = loads(r.pop("payload_json"))
+    return rows
+
+
+def _events(req, p, b):
+    p.require("events.read")
+    return {"events": events_for(p, int(qp(req, "after") or 0), min(int(qp(req, "limit") or 200), 1000)),
+            "last_id": R.db.val("SELECT COALESCE(MAX(id),0) FROM events")}
+
+
+def _audit(req, p, b):
+    p.require("audit.read")
+    return R.db.all("SELECT * FROM audit_log ORDER BY id DESC LIMIT 300")
+
+
+def _inventory(req, p, b):
+    p.require("inventory.read")
+    return R.db.all("SELECT w.region_code, w.name warehouse, p.sku, p.name product, i.on_hand, i.reserved, i.on_hand - i.reserved available, "
+                    "rp.reorder_point, i.updated_at FROM inventory i JOIN warehouses w ON w.id=i.warehouse_id JOIN products p ON p.id=i.product_id "
+                    "LEFT JOIN product_regions rp ON rp.product_id=p.id AND rp.region_code=w.region_code ORDER BY w.region_code, p.sku")
+
+
+def _inbox(req, p, b):
+    p.require("events.read")
+    if not p.is_central:
+        raise Forbidden("Somente central")
+    return R.db.all("SELECT id,provider,external_event_id,event_type,occurred_at,received_at,processed_at,status,attempts,last_error "
+                    "FROM webhook_inbox ORDER BY received_at DESC LIMIT 200")
+
+
+def _requeue(req, p, b): return {"status": commerce.requeue_dead_letter(p, req.path_params["id"])}
+
+
+def _demo_replay(req, p, b):
+    """Reenvia exatamente o mesmo evento (mesmo id) — demonstra proteção contra duplicidade."""
+    if not R.settings.is_demo:
+        raise Forbidden("Somente no ambiente demo")
+    p.require("webhooks.requeue")
+    item = R.db.one("SELECT * FROM webhook_inbox WHERE id=?", b.get("inbox_id"))
+    if not item:
+        raise NotFound("Entrada não encontrada")
+    from .providers import DemoPaymentProvider
+    ev = json.loads(item["payload"])
+    raw, headers = DemoPaymentProvider.build_webhook(ev["type"], ev["data"], ev["id"], ev["occurred_at"])
+    return commerce.receive_webhook("demo", raw, headers)
+
+
+def _demo_flags(req, p, b):
+    p.require("agents.pause")
+    return {"paused": R.db.val("SELECT value FROM system_flags WHERE key='agents_paused'") == "1"}
+
+
+async def stream(req: Request):
+    """SSE com retomada: o cliente envia Last-Event-ID (ou ?after) e recebe tudo o que perdeu."""
+    try:
+        p = principal(req)
+        p.require("events.read")
+    except AppError as e:
+        return JSONResponse({"ok": False, "error": e.code, "message": e.message}, status_code=e.status)
+    after = int(req.headers.get("last-event-id") or req.query_params.get("after") or 0)
+
+    async def gen():
+        nonlocal after
+        yield "retry: 3000\n\n"
+        last_ping = time.time()
+        while True:
+            if await req.is_disconnected():
+                break
+            rows = await run_in_threadpool(events_for, p, after, 200)
+            for r in rows:
+                after = r["id"]
+                yield f"id: {r['id']}\nevent: evento\ndata: {json.dumps(r, ensure_ascii=False)}\n\n"
+            if time.time() - last_ping > 10:
+                last_ping = time.time()
+                yield f"event: ping\ndata: {json.dumps({'at': iso(), 'last_id': after, 'scheduler': SCHED['last_tick']})}\n\n"
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+async def health(req):
+    return JSONResponse({"ok": True, "environment": R.settings.env, "time": iso(), "scheduler": SCHED,
+                         "integrations": {"stripe": "configurado" if R.settings.stripe_secret_key else "pendente",
+                                          "llm": "configurado" if R.settings.anthropic_api_key else "pendente",
+                                          "pagamentos_demo": R.settings.is_demo},
+                         "vendor": {"gsap": (WEB / "vendor" / "gsap.min.js").exists()}})
+
+
+async def index(req):
+    return FileResponse(WEB / "index.html")
+
+
+async def store_page(req):
+    return FileResponse(WEB / "loja.html")
+
+
+class SecurityHeaders(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        resp = await call_next(request)
+        resp.headers["Content-Security-Policy"] = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+                                                   "script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "same-origin"
+        resp.headers["X-Environment"] = R.settings.env
+        return resp
+
+
+# ------------------------------------------------------------------ agendador
+def tick():
+    from .tasks import process_recurrences
+    for fn in (ops.heartbeat_internal_modules, process_recurrences, commerce.retry_due_webhooks, commerce.expire_reservations,
+               commerce.release_commissions, agents.run_due_agents):
+        try:
+            fn()
+        except Exception as e:  # um passo com falha não derruba os demais
+            SCHED["last_error"] = f"{fn.__name__}: {e}"
+    SCHED["last_tick"] = iso()
+    SCHED["ticks"] += 1
+
+
+def _scheduler_loop(stop: threading.Event):
+    while not stop.wait(R.settings.scheduler_interval_s):
+        tick()
+
+
+def create_app(**overrides):
+    settings = load_settings(**overrides)
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    R.settings = settings
+    R.db = DB(settings.db_path)
+    R.db.init()
+    with R.db.tx() as c:
+        envrow = c.execute("SELECT value FROM meta WHERE key='environment'").fetchone()
+        if envrow and envrow[0] != settings.env:
+            raise RuntimeError("Banco pertence a outro ambiente")
+        if not envrow:
+            c.execute("INSERT INTO meta(key,value) VALUES ('environment',?)", (settings.env,))
+        agents.ensure_agents(c)
+    if settings.is_demo:
+        seed.seed_demo()
+
+    stop = threading.Event()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        th = None
+        if settings.scheduler_enabled:
+            th = threading.Thread(target=_scheduler_loop, args=(stop,), daemon=True)
+            th.start()
+        yield
+        stop.set()
+
+    P = private
+    routes = [
+        Route("/", index), Route("/loja/{slug}", store_page), Route("/api/health", health),
+        Route("/api/auth/login", login, methods=["POST"]), Route("/api/auth/logout", logout, methods=["POST"]), Route("/api/me", me),
+        Route("/api/public/stores/{slug}", store_get), Route("/api/public/stores/{slug}/checkout", store_checkout, methods=["POST"]),
+        Route("/api/public/orders/{code}", order_public), Route("/api/public/orders/{code}/pay", order_pay, methods=["POST"]),
+        Route("/api/webhooks/payments/{provider}", webhook, methods=["POST"]),
+        Route("/api/world", P(_world)), Route("/api/overview", P(_overview)), Route("/api/partners/{id}/building", P(_building)),
+        Route("/api/partners/{id}/storefronts", P(_sf_create), methods=["POST"]), Route("/api/storefronts/{id}", P(_sf_patch), methods=["PATCH"]),
+        Route("/api/orders", P(_orders)), Route("/api/orders/{id}", P(_order)),
+        Route("/api/orders/{id}/ship", P(_ship), methods=["POST"]), Route("/api/orders/{id}/cancel", P(_cancel), methods=["POST"]),
+        Route("/api/orders/{id}/return", P(_return), methods=["POST"]), Route("/api/returns/{id}/receive", P(_receive_return), methods=["POST"]),
+        Route("/api/tasks", P(_tasks)), Route("/api/tasks", P(_task_create), methods=["POST"]),
+        Route("/api/tasks/{id}", P(_task_get)), Route("/api/tasks/{id}", P(_task_patch), methods=["PATCH"]),
+        Route("/api/tasks/{id}/comments", P(_task_comment), methods=["POST"]),
+        Route("/api/tasks/{id}/attachments", P(_task_attach), methods=["POST"]), Route("/api/attachments/{id}", P(_attachment)),
+        Route("/api/closings", P(_closings)), Route("/api/closings", P(_closing_prepare), methods=["POST"]),
+        Route("/api/closings/{id}/advance", P(_closing_advance), methods=["POST"]),
+        Route("/api/closings/{id}/reopen", P(_closing_reopen), methods=["POST"]),
+        Route("/api/closings/{id}/settle", P(_closing_settle), methods=["POST"]),
+        Route("/api/commissions/adjustments", P(_adjust), methods=["POST"]),
+        Route("/api/agents", P(_agents)), Route("/api/agents/pause", P(_pause), methods=["POST"]),
+        Route("/api/agents/{id}/runs", P(_agent_runs)), Route("/api/agents/{code}/run", P(_agent_run), methods=["POST"]),
+        Route("/api/approvals", P(_approvals)), Route("/api/approvals/{id}/decide", P(_approve), methods=["POST"]),
+        Route("/api/approvals/{id}/cancel", P(_approval_cancel), methods=["POST"]),
+        Route("/api/policies", P(_policies)), Route("/api/policies/{action}", P(_policy_put), methods=["PUT"]),
+        Route("/api/events", P(_events)), Route("/api/stream", stream), Route("/api/audit", P(_audit)),
+        Route("/api/inventory", P(_inventory)), Route("/api/webhooks/inbox", P(_inbox)),
+        Route("/api/webhooks/inbox/{id}/requeue", P(_requeue), methods=["POST"]),
+        Route("/api/demo/replay-webhook", P(_demo_replay), methods=["POST"]),
+        Mount("/static", StaticFiles(directory=str(WEB)), name="static"),
+    ]
+    app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(SecurityHeaders)])
+    app.state.tick = tick
+    return app
