@@ -158,7 +158,7 @@ def _ollama_ok():
     return val
 
 
-def run_checks() -> dict:
+def run_checks(force_key=False) -> dict:
     from . import geo
     from .main import SCHED
     S = R.settings
@@ -200,6 +200,13 @@ def run_checks() -> dict:
                    "ligada com o modelo " + S.ollama_model if up and has_model else
                    ("ligada, mas sem o modelo " + S.ollama_model if up else "desligada — o sistema segue com regras fixas"),
                    "o iniciar*.bat liga o Ollama"))
+    # chave da Claude (reserva paga dos CEOs) — teste sem custo
+    from . import brain
+    k = brain.key_check(force=force_key)
+    extra = f" · chave {k['chave']} lida de {k['origem']}" if k.get("configurada") else ""
+    if k.get("substituiu_variavel_antiga"):
+        extra += " (havia uma chave antiga no Windows; a do arquivo foi usada)"
+    out.append(_ck("claude", "Claude (chave da API)", k["nivel"], k["detalhe"] + extra, "teste automático a cada hora, sem gastar crédito"))
     # WhatsApp
     from . import channels
     if not channels.configured():
@@ -292,6 +299,6 @@ def summary():
 
 def overview(actor, refresh=False):
     actor.require("sistema.saude")
-    res = run_checks() if refresh or _cache["result"] is None else _cache["result"]
+    res = run_checks(force_key=refresh) if refresh or _cache["result"] is None else _cache["result"]
     return {**res, "client_errors": list_client_errors(30),
             "backups": [{"file": p.name, "bytes": p.stat().st_size} for p in sorted(backup_dir().glob(f"{R.settings.env}_*.sqlite3"))[-5:]]}

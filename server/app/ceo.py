@@ -320,7 +320,7 @@ def _daily_briefing(run, pid):
 
 # ------------------------------------------------------------------ funcionários que pesquisam/escrevem (fora de transação)
 def _ready_tasks(agent_id, limit=3):
-    return R.db.all("SELECT * FROM tasks t WHERE assignee_type='agente' AND assignee_id=? AND status='a_fazer' AND NOT EXISTS ("
+    return R.db.all("SELECT * FROM tasks t WHERE assignee_type='agente' AND assignee_id=? AND status='a_fazer' AND (recurrence_rule IS NULL OR recurrence_parent_id IS NOT NULL) AND NOT EXISTS ("
                     "SELECT 1 FROM task_dependencies d JOIN tasks x ON x.id=d.depends_on_id WHERE d.task_id=t.id AND x.status!='concluida') "
                     "ORDER BY due_at LIMIT ?", agent_id, limit)
 
@@ -329,6 +329,11 @@ def _venture_of(t):
     if (t.get("related_entity") or "").startswith("venture:"):
         return R.db.one("SELECT * FROM ventures WHERE id=?", t["related_entity"][8:])
     return None
+
+
+def agents_deliver(c, actor, tid, note):
+    from .agents import deliver
+    return deliver(c, actor, tid, note)
 
 
 def r_pesquisa(run):
@@ -359,7 +364,7 @@ def r_pesquisa(run):
         with R.db.tx() as c:
             run.c = c
             run.tool("pesquisa.noticias", q, f"{len(lines)} itens" + (f" · {found['error']}" if found["error"] else ""), ok=not found["error"])
-            tasks.update_task(c, run.actor, t["id"], {"status": "concluida"}, note=note)
+            agents_deliver(c, run.actor, t["id"], note)
         done.append(t["id"])
     with R.db.tx() as c:
         run.c = c
@@ -391,7 +396,7 @@ def r_conteudo(run):
             with R.db.tx() as c:
                 run.c = c
                 run.tool("cerebro.rotina", t["title"], out["model"])
-                tasks.update_task(c, run.actor, t["id"], {"status": "concluida"}, note=draft)
+                agents_deliver(c, run.actor, t["id"], draft)
             done.append(t["id"])
         except brain.BrainUnavailable as e:
             with R.db.tx() as c:

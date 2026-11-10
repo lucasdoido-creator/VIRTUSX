@@ -158,13 +158,28 @@ def run_agent(code, trigger="manual", actor: Principal | None = None):
 
 def _pick_assigned_tasks(run):
     return [dict(r) for r in run.c.execute(
-        "SELECT * FROM tasks t WHERE assignee_type='agente' AND assignee_id=? AND status='a_fazer' AND NOT EXISTS ("
+        "SELECT * FROM tasks t WHERE assignee_type='agente' AND assignee_id=? AND status='a_fazer' AND (recurrence_rule IS NULL OR recurrence_parent_id IS NOT NULL) AND NOT EXISTS ("
         "SELECT 1 FROM task_dependencies d JOIN tasks x ON x.id=d.depends_on_id WHERE d.task_id=t.id AND x.status!='concluida') "
         "ORDER BY due_at LIMIT 5", (run.agent["id"],)).fetchall()]
 
 
 def _is_venture(t):
     return (t.get("related_entity") or "").startswith("venture:")
+
+
+def deliver(c, actor, task_id, note):
+    """Entrega do agente: conclui a tarefa; se houver checklist que só uma pessoa pode marcar (trabalho físico),
+    registra a entrega e deixa a tarefa "aguardando terceiro" para uma pessoa — nunca trava nem repete a rotina."""
+    t = c.execute("SELECT checklist_json FROM tasks WHERE id=?", (task_id,)).fetchone()
+    cl = loads(t["checklist_json"]) if t else None
+    if cl and not all(i.get("done") for i in cl):
+        falta = sum(1 for i in cl if not i.get("done"))
+        tasks.update_task(c, actor, task_id, {"status": "aguardando_terceiro"},
+                          note=(note + "\n\n" if note else "") + f"Esta tarefa tem checklist ({falta} item(ns)) que precisa ser feito por uma pessoa: "
+                               "atribua a um técnico ou marque os itens e conclua.")
+        return False
+    tasks.update_task(c, actor, task_id, {"status": "concluida"}, note=note)
+    return True
 
 
 def _start_task(run, t):
@@ -199,8 +214,7 @@ def r_coordenador(run):
               f"{len(unassigned)} pendências sem responsável; agentes com falha: {', '.join(f[0] for f in failed) or 'nenhum'}.")
     for t in mine:
         lines = [f"• {x['title']} (prazo {x['due_at'][:16].replace('T', ' ') if x['due_at'] else '—'})" for x in overdue[:15]]
-        tasks.update_task(c, run.actor, t["id"], {"status": "concluida"},
-                          note="Revisão de prazos e pendências (cálculo determinístico):\n" + report + ("\nVencidas:\n" + "\n".join(lines) if lines else ""))
+        deliver(c, run.actor, t["id"], "Revisão de prazos e pendências (cálculo determinístico):\n" + report + ("\nVencidas:\n" + "\n".join(lines) if lines else ""))
     run.finish("concluido", report,
                {"vencidas": [t["id"] for t in overdue], "encaminhadas": escalated, "sem_responsavel": [t["id"] for t in unassigned]})
 
@@ -219,7 +233,7 @@ def r_estoque(run):
         low = [l for r, l in zip(rows, lines) if r["on_hand"] - r["reserved"] < r["reorder_point"]]
         run.tool("estoque.consultar", region[0] if region else "todas", f"{len(rows)} posições; {len(low)} abaixo do ponto")
         note = "Verificação de estoque concluída.\n" + "\n".join(lines) + (f"\nAbaixo do ponto de reposição: {len(low)}" if low else "")
-        tasks.update_task(c, run.actor, t["id"], {"status": "concluida"}, note=note)
+        deliver(c, run.actor, t["id"], note)
         done.append(t["id"])
     # varredura de reposição
     low = c.execute("SELECT i.warehouse_id, i.product_id, i.on_hand, i.reserved, rp.reorder_point, w.region_code, p.sku FROM inventory i "
@@ -275,9 +289,9 @@ def r_financeiro(run):
         _start_task(run, t)
         if _is_venture(t):
             from .ceo import deterministic_deliverable
-            tasks.update_task(c, run.actor, t["id"], {"status": "concluida"}, note=deterministic_deliverable(c, "financeiro", t))
+            deliver(c, run.actor, t["id"], deterministic_deliverable(c, "financeiro", t))
             continue
-        tasks.update_task(c, run.actor, t["id"], {"status": "concluida"}, note="Conciliação executada: " +
+        deliver(c, run.actor, t["id"], "Conciliação executada: " +
                           (f"{len(issues)} divergência(s)." if issues else "sem divergências novas."))
     for p in c.execute("SELECT p.id, r.timezone FROM partners p JOIN regions r ON r.code=p.region_code WHERE p.status='ativo' "
                        "AND p.commercial_model='central_commission'").fetchall():
@@ -305,7 +319,7 @@ def r_catalogo(run):
         _start_task(run, t)
         if _is_venture(t):
             from .ceo import deterministic_deliverable
-            tasks.update_task(c, run.actor, t["id"], {"status": "concluida"}, note=deterministic_deliverable(c, "catalogo", t))
+            deliver(c, run.actor, t["id"], deterministic_deliverable(c, "catalogo", t))
             continue
         if not R.settings.anthropic_api_key:
             # Sem credencial de IA: a tarefa não é concluída nem simulada; fica aguardando terceiro (integração).
@@ -360,7 +374,7 @@ def r_analise(run):
     for t in _pick_assigned_tasks(run):
         _start_task(run, t)
         from .ceo import deterministic_deliverable
-        tasks.update_task(c, run.actor, t["id"], {"status": "concluida"}, note=deterministic_deliverable(c, "analise", t))
+        deliver(c, run.actor, t["id"], deterministic_deliverable(c, "analise", t))
     rows = c.execute(
         "SELECT o.region_code, o.currency, SUM(oi.line_total_minor) receita, SUM(oi.qty * COALESCE(rp.unit_cost_minor,0)) custo "
         "FROM orders o JOIN order_items oi ON oi.order_id=o.id JOIN product_regions rp ON rp.product_id=oi.product_id AND rp.region_code=o.region_code "

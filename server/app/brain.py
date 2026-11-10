@@ -93,12 +93,50 @@ def status():
             "routine_fallback_to_claude": R.settings.routine_fallback_to_claude}
 
 
-def _call_ollama(system, user, max_tokens, json_mode):
+OLLAMA_TIMEOUT_S = {"rotina": 240, "decisao": 420}   # IA local no processador do PC é lenta: plano completo leva minutos
+_key_state = {"at": 0.0, "result": None}
+
+
+def key_check(force=False):
+    """Confere se a chave da Claude é aceita, SEM gastar crédito (lista de modelos, não gera texto). Cache de 1 h."""
+    from .config import _FROM_FILE, _OVERRIDDEN
+    key = R.settings.anthropic_api_key or ""
+    src = ("config.local.env" if "ANTHROPIC_API_KEY" in _FROM_FILE else "variável de ambiente do Windows") if key else None
+    masked = f"{key[:7]}…{key[-4:]}" if len(key) > 14 else ("(curta demais)" if key else None)
+    base = {"configurada": bool(key), "origem": src, "chave": masked,
+            "substituiu_variavel_antiga": "ANTHROPIC_API_KEY" in _OVERRIDDEN}
+    if not key:
+        return {**base, "nivel": "cinza", "detalhe": "sem chave: CEOs usam só a IA grátis local (Ollama) e planos determinísticos"}
+    if not key.startswith("sk-ant-"):
+        return {**base, "nivel": "vermelho", "detalhe": "formato inválido: a chave da API começa com sk-ant- (crie em console.anthropic.com → API Keys)"}
+    if not force and _key_state["result"] and time.time() - _key_state["at"] < 3600:
+        return {**_key_state["result"], **base}
+    try:
+        if TRANSPORT.get("key_check"):
+            code = TRANSPORT["key_check"](key)
+        else:
+            import httpx
+            code = httpx.get("https://api.anthropic.com/v1/models", timeout=15,
+                             headers={"x-api-key": key, "anthropic-version": "2023-06-01"}).status_code
+        if code == 200:
+            res = {"nivel": "verde", "detalhe": "chave aceita pela Anthropic (teste sem custo)"}
+        elif code in (401, 403):
+            res = {"nivel": "vermelho", "detalhe": f"chave recusada pela Anthropic ({code}): revogada, digitada errada ou de outra conta. "
+                                                   "Gere uma nova em console.anthropic.com → API Keys e cole em config.local.env"}
+        else:
+            res = {"nivel": "amarelo", "detalhe": f"resposta inesperada da Anthropic ({code}); tento de novo mais tarde"}
+    except Exception as e:
+        res = {"nivel": "amarelo", "detalhe": f"sem conexão com a Anthropic agora ({type(e).__name__})"}
+    _key_state.update(at=time.time(), result=res)
+    return {**res, **base}
+
+
+def _call_ollama(system, user, max_tokens, json_mode, tier="rotina"):
     payload = {"model": R.settings.ollama_model, "stream": False, "options": {"num_predict": max_tokens, "temperature": 0.3},
                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
     if json_mode:
         payload["format"] = "json"
-    fn = TRANSPORT["ollama"] or (lambda p: _http_post(R.settings.ollama_url.rstrip("/") + "/api/chat", p))
+    fn = TRANSPORT["ollama"] or (lambda p: _http_post(R.settings.ollama_url.rstrip("/") + "/api/chat", p, timeout=OLLAMA_TIMEOUT_S.get(tier, 240)))
     data = fn(payload)
     return data["message"]["content"], int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0), 0.0
 
@@ -145,7 +183,7 @@ def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=9
                 reasons.append(st["error"] or "Ollama indisponível")
                 continue
             try:
-                text, tin, tout, cost = _call_ollama(system, user, max_tokens, json_mode)
+                text, tin, tout, cost = _call_ollama(system, user, max_tokens, json_mode, tier)
             except Exception as e:
                 _record("ollama", R.settings.ollama_model, tier, purpose, partner_id, 0, 0, 0.0, False, str(e))
                 reasons.append(f"Ollama falhou: {type(e).__name__}")

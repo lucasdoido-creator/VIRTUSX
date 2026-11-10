@@ -57,16 +57,28 @@ class Settings:
         return self.env == "demo"
 
 
+_FROM_FILE: set = set()
+_OVERRIDDEN: set = set()
+
+
 def _load_local_env():
-    """Lê config.local.env (fica só no seu computador; não vai para o GitHub). Variáveis já definidas têm prioridade."""
+    """Lê config.local.env (fica só no seu computador; não vai para o GitHub). O arquivo tem prioridade sobre variáveis do sistema."""
     p = ROOT / "config.local.env"
     if not p.exists():
         return
     for line in p.read_text(encoding="utf-8-sig").splitlines():  # utf-8-sig tolera BOM do Bloco de Notas
         line = line.strip()
+        if line.lower().startswith("export "):
+            line = line[7:].strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip().strip('"'))
+            k, v = k.strip(), v.strip().strip('"').strip("'").strip()
+            if not v:
+                continue
+            if k in os.environ and os.environ[k] != v:
+                _OVERRIDDEN.add(k)   # o arquivo vence uma variável antiga do Windows com o mesmo nome
+            os.environ[k] = v
+            _FROM_FILE.add(k)
 
 
 def load_settings(**overrides) -> Settings:
