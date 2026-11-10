@@ -10,7 +10,8 @@ from app import commerce
 def app(tmp_path):
     dbmod.reset_clock()
     commerce.FAIL_INJECTION["count"] = 0
-    a = create_app(data_dir=tmp_path, scheduler_enabled=False, demo_webhook_delay_s=0)
+    a = create_app(data_dir=tmp_path, scheduler_enabled=False, demo_webhook_delay_s=0, research_enabled=False,
+                   ollama_url="http://127.0.0.1:9", extra={"sync_agents": True})  # testes nunca saem para a rede
     yield a
     dbmod.reset_clock()
 

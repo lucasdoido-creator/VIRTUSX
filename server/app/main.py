@@ -22,7 +22,7 @@ from .config import ROOT, load_settings
 from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, hash_token, new_token, verify_password
 from .db import DB, iso, loads, now
 from datetime import timedelta
-from . import agents, closings, commerce, ops, policies, seed, tasks
+from . import agents, brain, ceo, closings, commerce, ops, policies, seed, tasks
 
 WEB = ROOT / "web"
 # No Windows o registro pode mapear .js para text/plain, o que bloqueia módulos JS no navegador.
@@ -317,6 +317,24 @@ def _demo_replay(req, p, b):
     return commerce.receive_webhook("demo", raw, headers)
 
 
+def _ceo(req, p, b): return ceo.list_ventures(p, req.path_params["id"])
+def _idea(req, p, b): return {"id": ceo.submit_idea(p, req.path_params["id"], b.get("idea"), b.get("keywords"))}
+
+
+def _ceo_run(req, p, b):
+    pid = req.path_params["id"]
+    p.require("ventures.write", pid)
+    return agents.run_agent(ceo.ceo_code(pid), "manual")
+
+
+def _brain(req, p, b):
+    p.require("agents.read")
+    st = brain.status()
+    if not p.is_central:
+        st.pop("month_spend_usd", None)
+    return st
+
+
 def _demo_flags(req, p, b):
     p.require("agents.pause")
     return {"paused": R.db.val("SELECT value FROM system_flags WHERE key='agents_paused'") == "1"}
@@ -410,6 +428,9 @@ def create_app(**overrides):
         agents.ensure_agents(c)
     if settings.is_demo:
         seed.seed_demo()
+    with R.db.tx() as c:
+        agents.ensure_agents(c)  # agentes novos entram em bancos já existentes
+        ceo.ensure_ceos(c)       # um CEO de IA por parceiro
 
     stop = threading.Event()
 
@@ -443,6 +464,8 @@ def create_app(**overrides):
         Route("/api/closings/{id}/reopen", P(_closing_reopen), methods=["POST"]),
         Route("/api/closings/{id}/settle", P(_closing_settle), methods=["POST"]),
         Route("/api/commissions/adjustments", P(_adjust), methods=["POST"]),
+        Route("/api/partners/{id}/ceo", P(_ceo)), Route("/api/partners/{id}/ideas", P(_idea), methods=["POST"]),
+        Route("/api/partners/{id}/ceo/run", P(_ceo_run), methods=["POST"]), Route("/api/brain", P(_brain)),
         Route("/api/agents", P(_agents)), Route("/api/agents/pause", P(_pause), methods=["POST"]),
         Route("/api/agents/{id}/runs", P(_agent_runs)), Route("/api/agents/{code}/run", P(_agent_run), methods=["POST"]),
         Route("/api/approvals", P(_approvals)), Route("/api/approvals/{id}/decide", P(_approve), methods=["POST"]),

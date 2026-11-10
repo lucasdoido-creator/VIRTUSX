@@ -22,6 +22,13 @@ class Settings:
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     anthropic_api_key: str = ""
+    # Cérebro misto: IA local gratuita (Ollama) no dia a dia; Claude só em decisões, com teto mensal.
+    ollama_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = "qwen2.5:3b"
+    decision_model: str = "claude-haiku-5-5"
+    brain_monthly_cap_usd: float = 5.0
+    routine_fallback_to_claude: bool = False
+    research_enabled: bool = True
     webhook_tolerance_s: int = 300
     max_webhook_attempts: int = 5
     reservation_ttl_min: int = 30
@@ -53,6 +60,12 @@ def load_settings(**overrides) -> Settings:
         stripe_secret_key=os.environ.get("STRIPE_SECRET_KEY", ""),
         stripe_webhook_secret=os.environ.get("STRIPE_WEBHOOK_SECRET", ""),
         anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        ollama_url=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
+        ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:3b"),
+        decision_model=os.environ.get("BRAIN_DECISION_MODEL", "claude-haiku-5-5"),
+        brain_monthly_cap_usd=float(os.environ.get("BRAIN_MONTHLY_CAP_USD", "5")),
+        routine_fallback_to_claude=os.environ.get("BRAIN_ROUTINE_FALLBACK_CLAUDE", "0") == "1",
+        research_enabled=os.environ.get("RESEARCH", "1") == "1",
         scheduler_enabled=os.environ.get("SCHEDULER", "1") == "1",
         scheduler_interval_s=float(os.environ.get("SCHEDULER_INTERVAL_S", "5")),
     )

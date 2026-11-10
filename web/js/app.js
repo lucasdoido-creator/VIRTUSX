@@ -140,7 +140,8 @@ function closePanel() { if (!S.panel) return; S.panel = null; const el = $("#pan
 
 // ---------- prédio do parceiro
 async function openBuilding(pid, floor = "recepcao") {
-  const b = await api(`/api/partners/${pid}/building`); const p = b.partner;
+  const [b, ceoData] = await Promise.all([api(`/api/partners/${pid}/building`), can("ventures.read") ? api(`/api/partners/${pid}/ceo`).catch(() => null) : null]);
+  b.ceo = ceoData; const p = b.partner;
   const sub = `${st(b.status.level)} ${p.is_demo ? badge("DEMONSTRAÇÃO", "sim") : ""} ${badge(p.commercial_model === "central_commission" ? "Venda central + comissão" : "Revenda B2B (não operacional)")} · ${esc(p.region_name)}`;
   const tabs = [["status", "Sinalização"], ...FLOORS];
   const render = f => {
@@ -150,7 +151,39 @@ async function openBuilding(pid, floor = "recepcao") {
   };
   render(floor);
 }
+const VSTATUS = { recebida: "ideia recebida", pesquisando: "CEO pesquisando", em_execucao: "em execução", aguardando_proximo_ciclo: "etapa concluída · aguardando próximo ciclo" };
+function brainLine(br) {
+  if (!br) return "";
+  const o = br.ollama.ok ? badge(`IA local ${br.ollama.model}: ativa`, "ok") : badge("IA local (Ollama): desligada", "warn");
+  const c = br.claude.configured ? badge(`Claude ${br.claude.decision_model}: decisões`, "ok") : badge("Claude: sem chave", "");
+  const sp = br.month_spend_usd !== undefined ? ` · gasto no mês US$ ${br.month_spend_usd.toFixed(4)} de ${br.monthly_cap_usd.toFixed(2)}` : "";
+  return `<div class="row">${o} ${c}<span class="muted">${sp}</span></div>${br.ollama.ok ? "" : `<div class="muted">Sem IA local, o CEO usa plano-modelo e só fontes/medidas determinísticas. Para ativar grátis: instale o Ollama e rode <span class="mono">ollama pull ${esc(br.ollama.model)}</span>.</div>`}`;
+}
 const FLOOR_RENDER = {
+  diretoria: b => { const d = b.ceo; if (!d) return `<p class="muted">Sem acesso à Diretoria.</p>`; const cur = b.partner.currency;
+    const fmtPrev = f => f && f.ok ? `Previsão 30 dias: ${fmtMoney(f.previsao_minor, cur)} (faixa ${fmtMoney(f.faixa_minor[0], cur)}–${fmtMoney(f.faixa_minor[1], cur)}) · ${esc(f.metodo)}` : `Previsão: ${esc(f ? f.motivo : "—")}`;
+    return `<div class="card"><h4>${d.ceo ? `<span class="avatar-dot" style="background:rgb(${AGENT_RGB_SAFE(d.ceo.status).join(",")})"></span>${esc(d.ceo.name)} · ${badge(AGENT_LABEL[d.ceo.status] || d.ceo.status)}` : "CEO"}</h4>
+      <div class="muted">Desde ${fmtTime(d.ceo && d.ceo.status_since)} · próxima rodada ${fmtTime(d.ceo && d.ceo.next_run_at)} · contrata apenas agentes gratuitos da casa; gastos sempre passam por aprovação.</div>
+      ${brainLine(d.brain)}
+      ${can("ventures.write") ? `<div class="row" style="margin-top:6px"><button class="btn small" id="ceoRun">Rodar CEO agora</button></div>` : ""}</div>
+      ${can("ventures.write") ? `<form class="f card" id="ideaForm"><label>Nova ideia para o CEO transformar em realidade<textarea name="idea" rows="3" required minlength="8" placeholder="Ex.: kit presente corporativo com café e caneca personalizada"></textarea></label>
+        <label>Palavras-chave para pesquisa (opcional)<input name="keywords" placeholder="ex.: presente corporativo café"></label><button class="btn primary">Enviar ao CEO</button></form>` : ""}
+      <h4>Ideias e projetos</h4>${d.ventures.map(v => { const a = v.analysis || {}; const pct = v.progress.total ? Math.round(100 * v.progress.done / v.progress.total) : 0;
+        return `<div class="card"><h4>${esc(v.idea)} ${v.is_demo ? badge("demo", "sim") : ""}</h4>
+        <div class="row">${badge(VSTATUS[v.status] || v.status, v.status === "em_execucao" ? "ok" : "")} ${v.plan_source ? badge(v.plan_source === "ia" ? "plano por IA" : "plano-modelo (sem IA)") : ""}
+          <span class="muted">${v.progress.done}/${v.progress.total} tarefas · ${pct}%</span></div>
+        <div style="height:6px;background:#1e293b;border-radius:4px;margin:6px 0"><div style="height:6px;width:${pct}%;background:var(--accent);border-radius:4px"></div></div>
+        ${v.summary ? `<p>${esc(v.summary)}</p>` : ""}
+        ${(a.oportunidades || []).length ? `<div><b>Oportunidades:</b> ${a.oportunidades.map(esc).join(" · ")}</div>` : ""}
+        ${(a.riscos || []).length ? `<div><b>Riscos:</b> ${a.riscos.map(esc).join(" · ")}</div>` : ""}
+        ${(a.perguntas_para_o_dono || []).length ? `<div><b>Perguntas para você:</b> ${a.perguntas_para_o_dono.map(esc).join(" · ")}</div>` : ""}
+        ${a.previsao ? `<div class="muted">${fmtPrev(a.previsao)}</div>` : ""}
+        ${v.staff.length ? `<div style="margin-top:6px"><b>Equipe contratada (grátis):</b> ${v.staff.map(s => `<button class="btn small" data-agent="${s.agent_id}" title="${esc(s.role)}">${esc(s.name)} · ${esc(AGENT_LABEL[s.status] || s.status)}</button>`).join(" ")}</div>` : ""}
+        ${v.tasks.length ? `<ul class="timeline" style="margin-top:6px">${v.tasks.map(t => `<li><a href="#" data-task-open="${t.id}">${esc(t.title)}</a> ${badge(TASK_STATES[t.status], t.status === "concluida" ? "ok" : t.status === "aguardando_terceiro" ? "warn" : "")}</li>`).join("")}</ul>` : ""}</div>`; }).join("") || `<p class="muted">Nenhuma ideia ainda.</p>`}
+      <h4>Briefings do CEO</h4>${d.briefings.map(x => `<div class="card"><h4>${esc(x.kind === "plano" ? "Plano" : "Briefing diário")} · ${esc(x.local_day)} ${badge(x.brain || "")}</h4>
+        <p>${esc(x.summary || "")}</p>${(x.content.sinais || []).length ? `<ul>${x.content.sinais.map(s => `<li>${esc(s)}</li>`).join("")}</ul>` : ""}
+        ${x.content.previsao ? `<div class="muted">${fmtPrev(x.content.previsao)}</div>` : ""}${x.content.observacao ? `<div class="muted">${esc(x.content.observacao)}</div>` : ""}
+        ${x.sources.length ? `<details><summary>Fontes (${x.sources.length})</summary><ul>${x.sources.map(s => `<li><a href="${esc(s.link)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a> <span class="muted">${esc(s.source)}</span></li>`).join("")}</ul></details>` : ""}</div>`).join("") || `<p class="muted">Sem briefings ainda.</p>`}`; },
   status: b => `<div class="card"><h4>${st(b.status.level)} ${esc(b.status.text)}</h4><div class="muted">Calculado em ${fmtTime(b.status.computed_at)} · último dado recebido: ${fmtTime(b.status.last_data_at)}</div></div>` +
     (b.status.reasons.length ? b.status.reasons.map(r => `<div class="card"><h4>${st(r.level)} ${esc(r.message)}</h4>
       <dl class="kv"><dt>Origem</dt><dd>${esc(r.source)}</dd><dt>Atualizado em</dt><dd>${fmtTime(r.updated_at)}</dd></dl>
@@ -222,6 +255,10 @@ function bindFloor(f, b) {
     await act(() => api("/api/tasks", { method: "POST", body: { title: d.get("title"), description: d.get("description"), partner_id: b.partner.id, unit_id: d.get("unit_id") || null,
       assignee_type: atype || null, assignee_id: aid || null, priority: d.get("priority"), due_at: d.get("due") ? new Date(d.get("due")).toISOString() : null,
       recurrence_rule: d.get("recurrence") || null, kind: d.get("kind") } }), "Tarefa criada"); };
+  const idf = $("#ideaForm"); if (idf) idf.onsubmit = async e => { e.preventDefault(); const d = new FormData(idf);
+    await act(() => api(`/api/partners/${b.partner.id}/ideas`, { method: "POST", body: { idea: d.get("idea"), keywords: d.get("keywords") } }), "Ideia enviada: o CEO começa em instantes"); };
+  const cr = $("#ceoRun"); if (cr) cr.onclick = () => { cr.disabled = true; cr.textContent = "CEO trabalhando…";
+    act(() => api(`/api/partners/${b.partner.id}/ceo/run`, { method: "POST" }), "Rodada do CEO registrada").catch(() => {}); };
   const cf = $("#clForm"); if (cf) cf.onsubmit = async e => { e.preventDefault(); const d = new FormData(cf);
     await act(() => api("/api/closings", { method: "POST", body: { kind: d.get("kind"), partner_id: b.partner.id, period_type: d.get("period_type"), local_day: d.get("local_day") } }), "Fechamento preparado"); };
 }
@@ -370,8 +407,9 @@ async function openWarehouse(id) {
     ${inv.map(i => `<tr><td>${esc(i.sku)}<div class="muted">${esc(i.product)}</div></td><td>${i.on_hand}</td><td>${i.reserved}</td><td>${i.available < i.reorder_point ? `<b style="color:var(--warn)">${i.available}</b>` : i.available}</td><td>${i.reorder_point}</td></tr>`).join("")}</tbody></table>` });
 }
 async function openHQ() {
-  const appr = can("approvals.read") ? await api("/api/approvals") : [];
-  openPanel({ title: "Administração central", sub: S.world.agents_paused ? badge("agentes pausados", "bad") : "", reload: openHQ, html: approvalsHtml(appr) +
+  const [appr, br] = await Promise.all([can("approvals.read") ? api("/api/approvals") : [], api("/api/brain").catch(() => null)]);
+  openPanel({ title: "Administração central", sub: S.world.agents_paused ? badge("agentes pausados", "bad") : "", reload: openHQ, html:
+    `<div class="card"><h4>Cérebro de IA (misto, menor custo)</h4>${brainLine(br)}<div class="muted">Rotina → IA local grátis · Decisões → Claude dentro do teto mensal · Sem nenhum → regras determinísticas.</div></div>` + approvalsHtml(appr) +
     `<h4>Agentes</h4>${S.world.agents.map(agentCard).join("")}` });
   bindApprovals($("#pBody")); $("#pBody").querySelectorAll("[data-agent]").forEach(x => x.onclick = () => openAgent(x.dataset.agent));
 }

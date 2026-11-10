@@ -19,6 +19,8 @@ const api = (page, path, method = "GET", body) => page.evaluate(async ([path, me
 
 // 1. Central: visão global 3D
 const A = await ctxPage("admin@central.demo"); await A.page.waitForTimeout(2500);
+const ceoLabels = await A.page.$$eval(".lbl.ceo", els => els.length); log("rótulos de CEO no mundo:", ceoLabels);
+if (!ceoLabels) throw new Error("CEO de IA não apareceu no mundo 3D");
 await A.page.screenshot({ path: `${OUT}/01_global.png` }); log("visão global ok");
 const labels = await A.page.$$eval(".lbl", els => els.filter(e => e.style.display !== "none").map(e => e.textContent));
 log("rótulos visíveis:", labels.length, labels.slice(0, 6).join(" | "));
@@ -30,6 +32,17 @@ await M.page.waitForTimeout(1500); await M.page.screenshot({ path: `${OUT}/02_pr
 await M.page.click("#pTabs button:has-text('Comercial')"); await M.page.waitForSelector("#sfForm");
 await M.page.fill("#sfForm [name=slug]", "casa-aurora"); await M.page.fill("#sfForm [name=headline]", "Feito com calma, em São Paulo");
 await M.page.click("#sfForm button.primary"); await M.page.waitForSelector("#pBody a:has-text('Abrir loja')", { timeout: 10000 }); log("página criada e publicada pelo parceiro");
+
+// 2b. Diretoria: o parceiro envia uma ideia ao CEO de IA e acompanha o plano ser criado e distribuído
+await M.page.click("#pTabs button:has-text('Diretoria')"); await M.page.waitForSelector("#ideaForm");
+await M.page.fill("#ideaForm [name=idea]", "Kit presente corporativo com café especial e caneca personalizada");
+await M.page.fill("#ideaForm [name=keywords]", "presente corporativo café");
+await M.page.click("#ideaForm button.primary");
+await M.page.waitForFunction(() => (document.querySelector("#pBody")?.textContent || "").includes("presente corporativo") &&
+  [...document.querySelectorAll("#pBody .card")].some(c => c.textContent.includes("presente corporativo") && c.textContent.includes("em execução")), null, { timeout: 60000 });
+const staff = await M.page.$$eval("#pBody .card", cs => (cs.find(c => c.textContent.includes("presente corporativo")) || {}).textContent || "");
+log("CEO planejou a ideia; equipe contratada grátis:", /Equipe contratada/.test(staff));
+await M.page.screenshot({ path: `${OUT}/02b_diretoria_ceo.png` });
 
 // 3. Cliente faz pedido de teste na loja
 const C = await browser.newContext({ viewport: { width: 1200, height: 900 } }); const shop = await C.newPage();

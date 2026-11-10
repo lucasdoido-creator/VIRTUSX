@@ -179,6 +179,9 @@ def seed_demo():
                                    "assignee_id": "usr_aurora", "priority": "media", "recurrence_rule": "diaria", "source": "seed"})
         tasks.create_task(c, sys, {"title": "Revisar tradução pt-PT do catálogo", "partner_id": "prt_lisboa", "assignee_type": "agente",
                                    "assignee_id": "agt_catalogo", "priority": "media", "due_at": iso(now() + timedelta(days=2)), "source": "seed"})
+        c.execute("INSERT INTO ventures(id,partner_id,idea,keywords,status,created_by,created_at,updated_at,is_demo) VALUES "
+                  "('vnt_demo_natal','prt_aurora','Kit presente de Natal com café especial e caneca de cerâmica para vender na Casa Aurora',"
+                  "'kit presente café natal','recebida','seed',?,?,1)", (ts, ts))
         from .tz import get_tz
         yday = (now().astimezone(get_tz("America/Sao_Paulo")) - timedelta(days=1)).date().isoformat()
     closings.prepare(Principal("agent", "agt_financeiro", "financeiro_central", None, "Carla · Financeiro"), "vendas", "prt_aurora", "diario", yday)

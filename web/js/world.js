@@ -15,7 +15,7 @@ export const AGENT_LABEL = { disponivel: "disponível", executando: "executando"
 const AGENT_HOME = { coordenador: [0, 0, 6], estoque: SECTORS.logistica, financeiro: SECTORS.financeiro, catalogo: SECTORS.catalogo,
   analise: [-8, 0, 6], atendimento: SECTORS.atendimento, parceiros: [8, 0, 6] };
 export const FLOORS = [["recepcao", "Recepção"], ["comercial", "Comercial"], ["operacao", "Operação"], ["financeiro", "Financeiro"],
-  ["pendencias", "Pendências"], ["aplicativos", "Aplicativos"], ["equipe", "Equipe e agentes"]];
+  ["pendencias", "Pendências"], ["aplicativos", "Aplicativos"], ["equipe", "Equipe e agentes"], ["diretoria", "Diretoria · CEO de IA"]];
 
 const add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 
@@ -30,11 +30,15 @@ export class World {
   build(data) {
     this.data = data; const r = this.r; r.clear(); this.objs.clear();
     this.labelsEl.innerHTML = ""; this.labels = [];
-    r.add({ pos: [0, -1, 20], scale: [520, 1, 420], color: [0.035, 0.055, 0.095], grid: 1 });
+    r.add({ pos: [0, -1, 20], scale: [620, 1, 520], color: [0.030, 0.045, 0.100], grid: 1 });
+    this._scenery();
     const central = data.view === "central";
     // prédio central e setores
-    const hq = r.add({ pos: HQ, scale: [16, 52, 16], color: [0.10, 0.16, 0.28], win: 1, pick: { kind: "hq", id: "hq" } });
+    const hq = r.add({ pos: HQ, scale: [16, 52, 16], color: [0.10, 0.14, 0.30], win: 1, edge: 1, winColor: [0.70, 0.55, 1.0], pick: { kind: "hq", id: "hq" } });
     r.add({ pos: add3(HQ, [0, 52, 0]), scale: [10, 4, 10], color: [0.37, 0.92, 0.83], emissive: 0.6 });
+    r.add({ pos: add3(HQ, [0, 56, 0]), scale: [1.2, 22, 1.2], color: [0.65, 0.55, 1.0], emissive: 0.9 });  // antena
+    for (const [y, s] of [[18, 26], [32, 23], [46, 20]])  // anéis holográficos (cenário)
+      r.add({ pos: add3(HQ, [0, y, 0]), scale: [s, 0.35, s], color: [0.37, 0.92, 0.83], emissive: 0.8, alpha: 0.28 });
     this.objs.set("hq", hq); this._label("hq", "Administração central", add3(HQ, [0, 60, 0]), { kind: "hq", id: "hq" });
     if (central) for (const s of data.sectors) {
       const m = r.add({ pos: SECTORS[s.code], scale: [12, 12, 12], color: SECTOR_COLOR[s.code], win: 1, pick: { kind: "sector", id: s.code, data: s } });
@@ -67,7 +71,8 @@ export class World {
         const lvl = p.status.level, h = 20 + Math.min(p.units.length, 4) * 5;
         const visible = this._passes(p);
         const base = r.add({ pos: add3(pos, [0, 0, 0]), scale: [13, 0.5, 13], color: LEVEL_RGB[lvl], emissive: 0.35, alpha: 0.55, visible });
-        const b = r.add({ pos, scale: [9, h, 9], color: [0.11, 0.16, 0.26], win: 1, visible, pick: { kind: "partner", id: p.id, data: p } });
+        const b = r.add({ pos, scale: [9, h, 9], color: [0.10, 0.15, 0.27], win: 1, edge: 1, visible, pick: { kind: "partner", id: p.id, data: p } });
+        r.add({ pos: add3(pos, [0, h + 1.6, 0]), scale: [9.6, 0.25, 9.6], color: [0.37, 0.92, 0.83], emissive: 0.7, alpha: 0.35, visible });  // heliponto do CEO
         const beacon = r.add({ pos: add3(pos, [0, h, 0]), scale: [4, 1.6, 4], color: LEVEL_RGB[lvl], emissive: 0.9, visible, pick: { kind: "status", id: p.id, data: p } });
         p.units.forEach((u, j) => r.add({ pos: add3(pos, [7.5, 0, -3 + j * 4]), scale: [3, 3.5, 3], color: u.location_status === "confirmada" ? [0.25, 0.45, 0.6] : [0.22, 0.25, 0.3], visible,
           pick: { kind: "unit", id: u.id, data: { ...u, partner: p.name } } }));
@@ -84,6 +89,7 @@ export class World {
   }
   _buildAgents(agents) {
     for (const a of agents) {
+      if (a.code && a.code.startsWith("ceo_")) { this._buildCEO(a); continue; }
       const target = this._agentTarget(a); const prev = this.agentPos.get(a.id) || target; const cur = { x: prev[0], z: prev[2] };
       const col = AGENT_RGB[a.status] || AGENT_RGB.disponivel; const alpha = a.enabled ? 1 : 0.45;
       const body = this.r.add({ pos: [cur.x, 0.6, cur.z], scale: [1.8, 3.4, 1.8], color: col, emissive: a.status === "executando" ? 0.6 : 0.15, alpha, pick: { kind: "agent", id: a.id, data: a } });
@@ -97,6 +103,29 @@ export class World {
       }
       this.agentPos.set(a.id, target);
     }
+  }
+  // CEO de IA: fica no topo do prédio do próprio parceiro; cor = status real da última execução.
+  _buildCEO(a) {
+    const pid = a.code.slice(4), b = this.objs.get("partner:" + pid); if (!b || !b.visible) return;
+    const col = AGENT_RGB[a.status] || AGENT_RGB.disponivel, top = add3(b.home, [0, b.h + 1.85, 0]);
+    const body = this.r.add({ pos: top, scale: [2.4, 4.2, 2.4], color: [0.95, 0.78, 0.30], emissive: a.status === "executando" ? 0.8 : 0.3, pick: { kind: "agent", id: a.id, data: a } });
+    this.r.add({ pos: add3(top, [0, 4.3, 0]), scale: [1.9, 1.9, 1.9], color: [0.95, 0.96, 1.0], pick: { kind: "agent", id: a.id, data: a } });
+    for (const [dx, dz, sx, sz] of [[0, 1.9, 4.2, 0.3], [0, -1.9, 4.2, 0.3], [1.9, 0, 0.3, 4.2], [-1.9, 0, 0.3, 4.2]])  // halo = status
+      this.r.add({ pos: add3(top, [dx, 6.6, dz]), scale: [sx, 0.3, sz], color: col, emissive: 1.0 });
+    this.objs.set("agent:" + a.id, body); this.objs.set("ceo:" + pid, body);
+    this._label("agent:" + a.id, `<span class="sw" style="background:rgb(${col.map(x => x * 255 | 0)})"></span>${esc(a.name)} <small>· ${AGENT_LABEL[a.status] || a.status}</small>`,
+      add3(top, [0, 9.5, 0]), { kind: "agent", id: a.id }, true, null, "agent ceo");
+  }
+  // Cenário futurista decorativo e ESTÁTICO (não representa atividade): skyline distante e vias de luz.
+  _scenery() {
+    const r = this.r; let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < (r.lite ? 0 : 46); i++) {
+      const ang = (i / 46) * Math.PI * 2, rad = 250 + rnd() * 50, h = 30 + rnd() * 90, w = 8 + rnd() * 10;
+      r.add({ pos: [Math.cos(ang) * rad, 0, 20 + Math.sin(ang) * rad * 0.8], scale: [w, h, w], color: [0.06, 0.07, 0.15], win: 1, edge: 1,
+        winColor: rnd() > 0.5 ? [0.85, 0.35, 1.0] : [0.30, 0.80, 1.0] });
+    }
+    for (const z of [-80, 30, 130]) r.lines.push({ a: [-300, 0.2, z], b: [300, 0.2, z], color: [0.55, 0.30, 1.0, 0.25] });
+    for (const x of [-180, -50, 50, 180]) r.lines.push({ a: [x, 0.2, -200], b: [x, 0.2, 240], color: [0.30, 0.85, 1.0, 0.18] });
   }
   _agentTarget(a) {
     const idx = (this.data.agents.indexOf(a) % 4) * 2.4 - 3.6;
@@ -162,6 +191,15 @@ export class World {
   }
   // Pulso apenas para eventos REAIS recebidos do servidor.
   pulseFor(ev) {
+    if (ev.type === "ceo.contratou" && ev.payload) {  // linha do CEO até o agente contratado (evento real)
+      const ceo = this.objs.get("ceo:" + ev.partner_id), ag = this.objs.get("agent:" + ev.entity_id);
+      if (ceo && ag) this.r.pulse(add3(ceo.pos, [0, 4, 0]), add3(ag.pos, [0, 3, 0]), [0.95, 0.78, 0.30], 1.8);
+      return;
+    }
+    if (ev.type.startsWith("ceo.") && ev.partner_id) {
+      const ceo = this.objs.get("ceo:" + ev.partner_id); if (ceo) this.r.pulse(add3(HQ, [0, 56, 0]), add3(ceo.pos, [0, 5, 0]), [0.65, 0.55, 1.0], 1.6);
+      return;
+    }
     if (!ev.partner_id) return; const b = this.objs.get("partner:" + ev.partner_id); if (!b) return;
     const color = ev.type.startsWith("pagamento") ? [0.20, 0.83, 0.60] : ev.type.startsWith("estoque") ? [0.98, 0.75, 0.14]
       : ev.type.startsWith("comissao") ? [0.65, 0.55, 0.98] : ev.type.startsWith("envio") ? [0.38, 0.65, 1.0] : [0.37, 0.92, 0.83];

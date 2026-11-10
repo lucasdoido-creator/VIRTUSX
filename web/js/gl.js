@@ -36,14 +36,15 @@ const VS = `attribute vec3 aPos;attribute vec3 aNor;uniform mat4 uVP;uniform vec
 varying vec3 vNor;varying vec3 vLocal;varying vec3 vWorld;
 void main(){vec3 p=aPos*uScale+uOff;vLocal=aPos*uScale;vNor=aNor;vWorld=p;gl_Position=uVP*vec4(p,1.);}`;
 const FS = `precision mediump float;uniform vec3 uColor;uniform float uEmissive;uniform float uWin;uniform float uGrid;uniform float uAlpha;
-uniform vec3 uFog;uniform vec3 uEye;uniform vec3 uWinColor;varying vec3 vNor;varying vec3 vLocal;varying vec3 vWorld;
+uniform vec3 uFog;uniform vec3 uEye;uniform vec3 uWinColor;uniform float uEdge;varying vec3 vNor;varying vec3 vLocal;varying vec3 vWorld;
 void main(){vec3 n=normalize(vNor);vec3 L=normalize(vec3(.45,.9,.3));float diff=max(dot(n,L),0.);float hemi=.5+.5*n.y;
 vec3 col=uColor*(.30+.55*diff+.22*hemi);
 if(uWin>.5&&abs(n.y)<.5){vec2 uv=vec2(abs(n.x)>.5?vLocal.z:vLocal.x,vLocal.y);vec2 cell=fract(uv/vec2(1.1,1.3));
 float w=step(.22,cell.x)*step(cell.x,.78)*step(.28,cell.y)*step(cell.y,.78)*step(.9,vLocal.y);
 vec2 id=floor(uv/vec2(1.1,1.3));float r=fract(sin(dot(id,vec2(12.9898,78.233)))*43758.5453);
 col=mix(col,uWinColor*(.35+.65*r),w*.8);}
-if(uGrid>.5){vec2 g=abs(fract(vWorld.xz/10.)-.5);float line=1.-smoothstep(0.,.025,min(g.x,g.y));col+=vec3(.03,.10,.16)*line;}
+if(uGrid>.5){vec2 g=abs(fract(vWorld.xz/10.)-.5);float line=1.-smoothstep(0.,.025,min(g.x,g.y));vec2 G=abs(fract(vWorld.xz/60.)-.5);float big=1.-smoothstep(0.,.006,min(G.x,G.y));col+=vec3(.03,.10,.18)*line+vec3(.20,.10,.45)*big;}
+if(uEdge>.5&&abs(n.y)<.5){float e=1.-smoothstep(0.,.35,min(abs(vLocal.y-floor(vLocal.y/6.)*6.),6.));col+=uWinColor*.25*e;}
 col+=uColor*uEmissive;float d=length(vWorld-uEye);float fog=1.-exp(-pow(d*.0042,2.));col=mix(col,uFog,clamp(fog,0.,1.));
 gl_FragColor=vec4(col,uAlpha);}`;
 const LVS = `attribute vec3 aPos;uniform mat4 uVP;void main(){gl_Position=uVP*vec4(aPos,1.);}`;
@@ -66,13 +67,13 @@ export class Renderer {
     const gl = canvas.getContext("webgl", { antialias: !this.lite, alpha: false, preserveDrawingBuffer: !!opts.preserve });
     if (!gl) throw new Error("WebGL indisponível");
     this.gl = gl; this.meshes = []; this.lines = []; this.pulses = []; this.dirty = true;
-    this.bg = [0.027, 0.043, 0.078];
+    this.bg = [0.020, 0.028, 0.070];
     this.cam = { tx: 0, ty: 0, tz: 10, dist: 230, yaw: 0.5, pitch: 0.78 };
     this.p = this._prog(VS, FS); this.lp = this._prog(LVS, LFS);
     const c = cube(); this.vb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.vb); gl.bufferData(gl.ARRAY_BUFFER, c.pos, gl.STATIC_DRAW);
     this.nb = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.nb); gl.bufferData(gl.ARRAY_BUFFER, c.nor, gl.STATIC_DRAW);
     this.lb = gl.createBuffer();
-    this.U = {}; for (const u of ["uVP", "uOff", "uScale", "uColor", "uEmissive", "uWin", "uGrid", "uAlpha", "uFog", "uEye", "uWinColor"]) this.U[u] = gl.getUniformLocation(this.p, u);
+    this.U = {}; for (const u of ["uVP", "uOff", "uScale", "uColor", "uEmissive", "uWin", "uGrid", "uAlpha", "uFog", "uEye", "uWinColor", "uEdge"]) this.U[u] = gl.getUniformLocation(this.p, u);
     this.LU = { uVP: gl.getUniformLocation(this.lp, "uVP"), uColor: gl.getUniformLocation(this.lp, "uColor") };
     this._controls(); this._resize();
     new ResizeObserver(() => this._resize()).observe(canvas);
@@ -148,9 +149,9 @@ export class Renderer {
     gl.useProgram(this.p); const U = this.U;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vb); let loc = gl.getAttribLocation(this.p, "aPos"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.nb); loc = gl.getAttribLocation(this.p, "aNor"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-    gl.uniformMatrix4fv(U.uVP, false, vp); gl.uniform3fv(U.uFog, this.bg); gl.uniform3fv(U.uEye, eye); gl.uniform3fv(U.uWinColor, [1.0, 0.82, 0.55]);
+    gl.uniformMatrix4fv(U.uVP, false, vp); gl.uniform3fv(U.uFog, this.bg); gl.uniform3fv(U.uEye, eye);
     const draw = m => { gl.uniform3fv(U.uOff, m.pos); gl.uniform3fv(U.uScale, m.scale); gl.uniform3fv(U.uColor, m.color);
-      gl.uniform1f(U.uEmissive, m.emissive); gl.uniform1f(U.uWin, this.lite ? 0 : m.win); gl.uniform1f(U.uGrid, m.grid); gl.uniform1f(U.uAlpha, m.alpha); gl.drawArrays(gl.TRIANGLES, 0, 36); };
+      gl.uniform1f(U.uEmissive, m.emissive); gl.uniform1f(U.uWin, this.lite ? 0 : m.win); gl.uniform3fv(U.uWinColor, m.winColor || [0.45, 0.85, 1.0]); gl.uniform1f(U.uEdge, this.lite ? 0 : (m.edge || 0)); gl.uniform1f(U.uGrid, m.grid); gl.uniform1f(U.uAlpha, m.alpha); gl.drawArrays(gl.TRIANGLES, 0, 36); };
     const opaque = this.meshes.filter(m => m.visible && m.alpha >= 1), trans = this.meshes.filter(m => m.visible && m.alpha < 1);
     opaque.forEach(draw);
     const now = performance.now();

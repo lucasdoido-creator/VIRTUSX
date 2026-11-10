@@ -1,7 +1,7 @@
 # VIRTUSX — documentação única
 
 > Fonte única de verdade do projeto. Atualize este arquivo a cada etapa: decisões, arquitetura, modelo de dados, etapas, integrações, testes, limitações e custos.
-> Última atualização: 09/11/2026 · Etapa 1 concluída · Etapa 2 entregue em versão inicial · compatível com Windows · CI no GitHub.
+> Última atualização: 10/11/2026 · Etapa 1 concluída · Etapa 2 em versão inicial · **CEO de IA por parceiro** · Windows · CI no GitHub.
 
 ---
 
@@ -120,10 +120,36 @@ Todos os cálculos (estoque, comissão, saldo, fechamentos) são código determi
 | Financeiro | Ativo (determinístico) | conciliar, preparar fechamentos | Prepara; não confere/aprova/liquida | 30 min | US$ 30/mês | qualquer divergência |
 | Catálogo | Ativo; geração de texto **aguardando integração de IA** | consultar catálogo, rascunho de tradução | Só rascunhos; publicação humana | 60 min | US$ 50/mês | texto suspeito, atributo regulatório ausente |
 | Análise | Ativo (determinístico, somente leitura) | métricas | — | 60 min | US$ 20/mês | margem negativa |
+| CEO de IA (um por parceiro) | Ativo | pesquisa grátis, dados internos, previsão, cérebro, criar tarefas, contratar agentes internos | Só tarefas internas; gasto via política | ideia nova, diário | teto global do cérebro | perguntas ao dono, riscos, qualquer custo |
+| Pesquisa | Ativo | notícias RSS grátis, IA local | Somente leitura | tarefa do CEO | grátis | fonte indisponível |
+| Conteúdo | Ativo (precisa de IA local) | IA local | Só rascunhos, nunca publica | tarefa do CEO | grátis | todo rascunho é revisado |
 | Parceiros | Desativado (Etapa 5) | — | — | sob demanda | US$ 30/mês | alteração comercial |
 | Atendimento | Desativado; política `atendimento.responder` = proibido | — | — | 15 min | US$ 50/mês | reclamação, reembolso, ameaça legal |
 
 Controles: pausa global (admin), status por avatar (disponível, executando, aguardando integração, aguardando decisão, falhou, concluído), orçamento mensal, segregação (agente não aprova o que solicitou), cancelamento informa efeitos externos já realizados e compensações possíveis.
+
+## 7.1 CEO de IA de cada parceiro
+
+Cada parceiro tem um **CEO de IA** (agente `ceo_<parceiro>`, avatar dourado no topo do prédio; o halo mostra o status real). Ele:
+
+1. **Recebe uma ideia** (andar *Diretoria · CEO de IA* do prédio, ou `POST /api/partners/{id}/ideas`).
+2. **Pesquisa**: notícias públicas gratuitas (Google Notícias RSS, cache de 12 h), dados internos do parceiro e **previsão de vendas por regressão linear** (código, não IA).
+3. **Planeja** com o cérebro de nível *decisão*; a resposta é validada (formato, até 8 passos, só agentes permitidos, dependências remapeadas). Sem cérebro ou com resposta inválida → **plano-modelo** determinístico.
+4. **Contrata** funcionários gratuitos (agentes internos — custo zero) e **distribui tarefas** com prazos e dependências.
+5. Os agentes executam ao vivo: *Pesquisa* (manchetes + links), *Análise*/*Catálogo*/*Financeiro* (entregas determinísticas), *Estoque*, *Conteúdo* (rascunhos para revisão humana; nunca publica).
+6. **Briefing diário** (uma vez por dia local): sinais do mercado, previsão e até 2 ajustes de tarefa.
+
+Limites: o CEO só cria tarefas internas. Gastos, compras, campanhas, reembolsos e mudanças comerciais seguem as políticas da seção 7 (sem política → revisão humana). Textos externos ficam entre `<dados>` e nunca viram permissão. Parceiro vê só o próprio CEO.
+
+### Cérebro misto (menor custo)
+
+| Nível | Uso | Ordem | Custo |
+|---|---|---|---|
+| Rotina | briefing diário, resumos de pesquisa, rascunhos | Ollama local → (Claude só se `BRAIN_ROUTINE_FALLBACK_CLAUDE=1`) | grátis |
+| Decisão | plano de uma ideia nova | Claude (`BRAIN_DECISION_MODEL`, padrão Haiku 5.5) dentro do teto `BRAIN_MONTHLY_CAP_USD` (padrão US$ 5) → Ollama | ≈ US$ 0,0005 por plano com Haiku |
+| Sem cérebro | — | regras determinísticas e plano-modelo | zero |
+
+**Ativar a IA local grátis no Windows:** instale o Ollama (ollama.com), rode `ollama pull qwen2.5:3b` e reinicie o `iniciar.bat`. Para decisões com Claude: defina `ANTHROPIC_API_KEY` antes de iniciar. O consumo fica em `brain_usage` e aparece no prédio central (*Cérebro de IA*).
 
 ## 8. Como executar e acessar
 
@@ -144,7 +170,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **37 testes passando** (`tests/test_fluxo.py`, `tests/test_operacao.py`, `tests/test_tz.py`), também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **47 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`), sem rede e sem gasto,, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.
@@ -160,6 +186,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 - Fechamentos: segregação de funções, justificativa para divergências, aprovado ≠ liquidado, reabertura preserva original, liquidado exige ajuste.
 - Agentes: tarefa atribuída executada com evidência, compras preparadas sem política, pausa global, IA ausente → aguardando integração, texto de fornecedor tratado como dado, política proibida bloqueia agente.
 - Sinalização: sem dados = cinza; falha de integração = amarelo; dados velhos = cinza.
+- CEO: plano-modelo sem IA; plano por IA local validado (agente inexistente e instrução injetada descartados); Claude respeita o teto mensal; dependências respeitadas pelos agentes; Conteúdo sem IA fica *aguardando integração*; briefing uma vez por dia; isolamento entre parceiros; previsão determinística; cache de notícias.
 - Fusos embutidos idênticos à base oficial a cada 3 h de 2025 a 2027, incluindo viradas de horário de verão.
 
 Teste de navegador (`scripts/e2e.mjs`, Playwright/Chromium com WebGL por software): login, cidade 3D, prédio do parceiro brasileiro, criação de página pela interface, compra na loja com pagamento de teste, envio + comissão refletidos ao vivo, **queda e reinício do servidor** com pedido criado durante a desconexão e recebido após a reconexão, tabelas, visão móvel em modo leve, isolamento. Resultado: **E2E OK**.
@@ -212,6 +239,8 @@ Preços oficiais por milhão de tokens (entrada/saída): Claude Haiku 5.5 US$ 0,
 |---|---|---|
 | Rotinas determinísticas (coordenação, estoque, financeiro, análise) | Sem chamadas de IA | 0 |
 | Rascunhos de tradução (Haiku) | 1.500 tokens entrada + 600 saída por item; 1.000 itens/mês | ≈ 0,45 |
+| Planos do CEO (Haiku, decisão) | 3.000 + 1.400 tokens; 100 ideias/mês | ≈ 0,10 |
+| Briefings e rascunhos (Ollama local) | qualquer volume | 0 (usa o seu PC) |
 | Investigação de divergências (Sonnet) | 4.000 + 800 tokens; 300/mês | ≈ 5 |
 | Rascunhos de atendimento (Haiku → Sonnet) | 3.000 + 500 tokens; 2.000 chamados/mês | ≈ 1 (Haiku) a ≈ 22 (Sonnet) |
 | **Teto configurado** (soma dos orçamentos dos agentes) | limite rígido | 220 |

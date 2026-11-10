@@ -299,6 +299,27 @@ CREATE TABLE IF NOT EXISTS integrations (
   note TEXT, UNIQUE(partner_id, code)
 );
 
+CREATE TABLE IF NOT EXISTS ventures (
+  id TEXT PRIMARY KEY, partner_id TEXT NOT NULL REFERENCES partners(id), idea TEXT NOT NULL, keywords TEXT,
+  status TEXT NOT NULL, summary TEXT, analysis_json TEXT, plan_source TEXT, created_by TEXT NOT NULL,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, is_demo INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS venture_staff (
+  venture_id TEXT NOT NULL REFERENCES ventures(id), agent_id TEXT NOT NULL REFERENCES agents(id), role TEXT NOT NULL,
+  hired_at TEXT NOT NULL, cost_note TEXT NOT NULL, PRIMARY KEY (venture_id, agent_id)
+);
+CREATE TABLE IF NOT EXISTS ceo_briefings (
+  id TEXT PRIMARY KEY, partner_id TEXT NOT NULL, venture_id TEXT, local_day TEXT NOT NULL, kind TEXT NOT NULL,
+  summary TEXT, content_json TEXT NOT NULL, sources_json TEXT NOT NULL, brain TEXT, cost_minor INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS brain_usage (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, tier TEXT NOT NULL,
+  purpose TEXT, partner_id TEXT, tokens_in INTEGER NOT NULL, tokens_out INTEGER NOT NULL, cost_usd REAL NOT NULL, ok INTEGER NOT NULL,
+  error TEXT
+);
+CREATE TABLE IF NOT EXISTS research_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, payload TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS idempotency_keys (key TEXT PRIMARY KEY, scope TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
