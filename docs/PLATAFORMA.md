@@ -146,10 +146,12 @@ Limites: o CEO só cria tarefas internas. Gastos, compras, campanhas, reembolsos
 | Nível | Uso | Ordem | Custo |
 |---|---|---|---|
 | Rotina | briefing diário, resumos de pesquisa, rascunhos | Ollama local → (Claude só se `BRAIN_ROUTINE_FALLBACK_CLAUDE=1`) | grátis |
-| Decisão | plano de uma ideia nova | Claude (`BRAIN_DECISION_MODEL`, padrão Haiku 5.5) dentro do teto `BRAIN_MONTHLY_CAP_USD` (padrão US$ 5) → Ollama | ≈ US$ 0,0005 por plano com Haiku |
+| Decisão | plano de uma ideia nova | **Ollama primeiro**; Claude (`BRAIN_DECISION_MODEL`, padrão Haiku 5.5) só se a IA grátis estiver fora do ar ou devolver plano inválido, dentro dos tetos `BRAIN_DAILY_CAP_USD` (US$ 0,20) e `BRAIN_MONTHLY_CAP_USD` (US$ 2) | grátis; ≈ US$ 0,0005 quando sobe para o Claude |
 | Sem cérebro | — | regras determinísticas e plano-modelo | zero |
 
-**Ativar a IA local grátis no Windows:** instale o Ollama (ollama.com), rode `ollama pull qwen2.5:3b` e reinicie o `iniciar.bat`. Para decisões com Claude: defina `ANTHROPIC_API_KEY` antes de iniciar. O consumo fica em `brain_usage` e aparece no prédio central (*Cérebro de IA*).
+**Ativar a IA local grátis no Windows:** instale o Ollama (ollama.com), rode `ollama pull qwen2.5:3b` e reinicie o `iniciar.bat`.
+
+**Claude (reserva paga):** copie `config.local.env.exemplo` para `config.local.env` e preencha `ANTHROPIC_API_KEY` (o arquivo fica só no seu PC, fora do Git). Travas: teto diário e mensal; ao atingir, segue só com IA grátis e regras; aviso automático (evento + pendência) ao chegar a 80% do mês. O consumo fica em `brain_usage` e aparece no prédio central (*Cérebro de IA*).
 
 ## 8. Como executar e acessar
 
@@ -170,7 +172,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **47 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`), sem rede e sem gasto,, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **50 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`), sem rede e sem gasto,, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

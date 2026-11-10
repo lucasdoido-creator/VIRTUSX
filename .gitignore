@@ -4,3 +4,4 @@ __pycache__/
 scripts/node_modules/
 scripts/package*.json
 *.sqlite3*
+config.local.env

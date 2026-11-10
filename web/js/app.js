@@ -156,7 +156,7 @@ function brainLine(br) {
   if (!br) return "";
   const o = br.ollama.ok ? badge(`IA local ${br.ollama.model}: ativa`, "ok") : badge("IA local (Ollama): desligada", "warn");
   const c = br.claude.configured ? badge(`Claude ${br.claude.decision_model}: decisões`, "ok") : badge("Claude: sem chave", "");
-  const sp = br.month_spend_usd !== undefined ? ` · gasto no mês US$ ${br.month_spend_usd.toFixed(4)} de ${br.monthly_cap_usd.toFixed(2)}` : "";
+  const sp = br.month_spend_usd !== undefined ? ` · Claude hoje US$ ${br.day_spend_usd.toFixed(4)}/${br.daily_cap_usd.toFixed(2)} · mês US$ ${br.month_spend_usd.toFixed(4)}/${br.monthly_cap_usd.toFixed(2)}` : "";
   return `<div class="row">${o} ${c}<span class="muted">${sp}</span></div>${br.ollama.ok ? "" : `<div class="muted">Sem IA local, o CEO usa plano-modelo e só fontes/medidas determinísticas. Para ativar grátis: instale o Ollama e rode <span class="mono">ollama pull ${esc(br.ollama.model)}</span>.</div>`}`;
 }
 const FLOOR_RENDER = {
@@ -409,7 +409,7 @@ async function openWarehouse(id) {
 async function openHQ() {
   const [appr, br] = await Promise.all([can("approvals.read") ? api("/api/approvals") : [], api("/api/brain").catch(() => null)]);
   openPanel({ title: "Administração central", sub: S.world.agents_paused ? badge("agentes pausados", "bad") : "", reload: openHQ, html:
-    `<div class="card"><h4>Cérebro de IA (misto, menor custo)</h4>${brainLine(br)}<div class="muted">Rotina → IA local grátis · Decisões → Claude dentro do teto mensal · Sem nenhum → regras determinísticas.</div></div>` + approvalsHtml(appr) +
+    `<div class="card"><h4>Cérebro de IA (misto, menor custo)</h4>${brainLine(br)}<div class="muted">Sempre grátis primeiro: rotina só com IA local · decisões tentam a IA local e só sobem para o Claude se ela falhar, dentro dos tetos diário e mensal · sem IA → regras determinísticas.</div></div>` + approvalsHtml(appr) +
     `<h4>Agentes</h4>${S.world.agents.map(agentCard).join("")}` });
   bindApprovals($("#pBody")); $("#pBody").querySelectorAll("[data-agent]").forEach(x => x.onclick = () => openAgent(x.dataset.agent));
 }

@@ -26,7 +26,8 @@ class Settings:
     ollama_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen2.5:3b"
     decision_model: str = "claude-haiku-5-5"
-    brain_monthly_cap_usd: float = 5.0
+    brain_monthly_cap_usd: float = 2.0
+    brain_daily_cap_usd: float = 0.20
     routine_fallback_to_claude: bool = False
     research_enabled: bool = True
     webhook_tolerance_s: int = 300
@@ -49,7 +50,20 @@ class Settings:
         return self.env == "demo"
 
 
+def _load_local_env():
+    """Lê config.local.env (fica só no seu computador; não vai para o GitHub). Variáveis já definidas têm prioridade."""
+    p = ROOT / "config.local.env"
+    if not p.exists():
+        return
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"'))
+
+
 def load_settings(**overrides) -> Settings:
+    _load_local_env()
     env = os.environ.get("APP_ENV", "demo")
     if env not in ENVIRONMENTS:
         raise RuntimeError(f"APP_ENV inválido: {env}")
@@ -63,7 +77,8 @@ def load_settings(**overrides) -> Settings:
         ollama_url=os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
         ollama_model=os.environ.get("OLLAMA_MODEL", "qwen2.5:3b"),
         decision_model=os.environ.get("BRAIN_DECISION_MODEL", "claude-haiku-5-5"),
-        brain_monthly_cap_usd=float(os.environ.get("BRAIN_MONTHLY_CAP_USD", "5")),
+        brain_monthly_cap_usd=float(os.environ.get("BRAIN_MONTHLY_CAP_USD", "2")),
+        brain_daily_cap_usd=float(os.environ.get("BRAIN_DAILY_CAP_USD", "0.20")),
         routine_fallback_to_claude=os.environ.get("BRAIN_ROUTINE_FALLBACK_CLAUDE", "0") == "1",
         research_enabled=os.environ.get("RESEARCH", "1") == "1",
         scheduler_enabled=os.environ.get("SCHEDULER", "1") == "1",

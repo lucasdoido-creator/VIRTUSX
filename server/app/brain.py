@@ -1,8 +1,9 @@
-"""Cérebro de IA misto, com custo mínimo.
+"""Cérebro de IA misto, GRÁTIS primeiro.
 
 Ordem por nível:
-- 'rotina'  (briefings, rascunhos, resumos): Ollama local (grátis). Claude só se BRAIN_ROUTINE_FALLBACK_CLAUDE=1.
-- 'decisao' (plano de uma ideia nova): Claude (modelo barato por padrão) dentro do teto mensal; senão Ollama.
+- 'rotina'  (briefings, rascunhos, resumos): só Ollama local (grátis). Claude apenas se BRAIN_ROUTINE_FALLBACK_CLAUDE=1.
+- 'decisao' (plano de uma ideia nova): Ollama primeiro; o Claude só é chamado se a IA grátis estiver indisponível
+  ou devolver um plano inválido — e apenas dentro dos tetos diário e mensal. Aviso automático ao chegar a 80% do mês.
 Sem nenhum cérebro disponível → BrainUnavailable e o chamador usa o caminho determinístico (sem IA).
 
 Regras: conteúdo externo vai sempre delimitado como dado; números e cálculos vêm do código, nunca do modelo.
@@ -25,6 +26,30 @@ TRANSPORT = {"ollama": None, "claude": None}
 class BrainUnavailable(AppError):
     def __init__(self, why):
         super().__init__(f"Cérebro de IA indisponível: {why}", "cerebro_indisponivel", 503)
+
+
+def day_spend_usd():
+    return R.db.val("SELECT COALESCE(SUM(cost_usd),0) FROM brain_usage WHERE at>=?", now().strftime("%Y-%m-%dT00:00:00")) or 0.0
+
+
+def _maybe_alert():
+    """Ao passar de 80% do teto mensal: um aviso por mês (evento + pendência para a central)."""
+    cap = R.settings.brain_monthly_cap_usd
+    spent = month_spend_usd()
+    if cap <= 0 or spent < 0.8 * cap:
+        return
+    key = "brain_alert_" + now().strftime("%Y-%m")
+    from .core import Principal, emit, get_flag, set_flag
+    if get_flag(key):
+        return
+    from . import tasks
+    with R.db.tx() as c:
+        set_flag(c, key, "1", Principal("system", "cerebro"))
+        emit(c, "cerebro.alerta_gasto", "cerebro", status="80%", payload={"gasto_usd": round(spent, 4), "teto_usd": cap})
+        tasks.create_task(c, Principal("system", "cerebro"), {
+            "title": f"Gasto com Claude chegou a 80% do teto mensal (US$ {spent:.2f} de {cap:.2f})", "kind": "pendencia",
+            "pendency_type": "orcamento_ia", "priority": "alta", "source": "cerebro",
+            "description": "Ao atingir o teto, o sistema continua apenas com IA grátis e regras. Ajuste BRAIN_MONTHLY_CAP_USD se quiser."})
 
 
 def month_spend_usd():
@@ -64,6 +89,7 @@ def status():
     return {"ollama": {"ok": o["ok"], "url": R.settings.ollama_url, "model": R.settings.ollama_model, "error": o["error"]},
             "claude": {"configured": bool(R.settings.anthropic_api_key), "decision_model": R.settings.decision_model},
             "month_spend_usd": round(month_spend_usd(), 4), "monthly_cap_usd": R.settings.brain_monthly_cap_usd,
+            "day_spend_usd": round(day_spend_usd(), 4), "daily_cap_usd": R.settings.brain_daily_cap_usd,
             "routine_fallback_to_claude": R.settings.routine_fallback_to_claude}
 
 
@@ -99,14 +125,14 @@ def _record(provider, model, tier, purpose, partner_id, tin, tout, cost, ok, err
                   (iso(), provider, model, tier, purpose, partner_id, tin, tout, cost, 1 if ok else 0, (error or "")[:300] or None))
 
 
-def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=900, json_mode=True):
+def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=900, json_mode=True, validate=None):
     """Retorna {text, data (se JSON), provider, model, cost_usd, tokens_in, tokens_out}. Nunca chamar dentro de transação."""
     order = []
     claude_ok = bool(R.settings.anthropic_api_key)
     if tier == "decisao":
+        order.append("ollama")
         if claude_ok:
             order.append("claude")
-        order.append("ollama")
     else:
         order.append("ollama")
         if claude_ok and R.settings.routine_fallback_to_claude:
@@ -131,6 +157,9 @@ def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=9
             if month_spend_usd() + est > R.settings.brain_monthly_cap_usd:
                 reasons.append(f"teto mensal de US$ {R.settings.brain_monthly_cap_usd:.2f} atingido")
                 continue
+            if day_spend_usd() + est > R.settings.brain_daily_cap_usd:
+                reasons.append(f"teto diário de US$ {R.settings.brain_daily_cap_usd:.2f} atingido")
+                continue
             try:
                 text, tin, tout, cost = _call_claude(system, user, max_tokens, model)
             except Exception as e:
@@ -138,9 +167,17 @@ def think(system, user, tier="rotina", purpose="", partner_id=None, max_tokens=9
                 reasons.append(f"Claude falhou: {type(e).__name__}")
                 continue
         _record(prov, model, tier, purpose, partner_id, tin, tout, cost, True)
+        if prov == "claude":
+            _maybe_alert()
         out = {"text": text, "provider": prov, "model": model, "cost_usd": cost, "tokens_in": tin, "tokens_out": tout, "data": None}
         if json_mode:
             out["data"] = parse_json(text)
+        if validate is not None:
+            checked = validate(out["data"])
+            if not checked:  # resposta fraca: sobe para o próximo cérebro (se houver e couber no teto)
+                reasons.append(f"{prov} devolveu resposta inválida")
+                continue
+            out["data"] = checked
         return out
     if not order or (tier == "rotina" and not claude_ok and not reasons):
         reasons.append("nenhum provedor configurado")

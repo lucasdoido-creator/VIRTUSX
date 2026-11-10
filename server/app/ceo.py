@@ -181,11 +181,11 @@ def _plan_venture(run, v, pid):
             f"<dados>{json.dumps({'interno': snap, 'noticias': [i['title'] for i in found['items']]}, ensure_ascii=False)}</dados>")
     brain_used, cost, plan = "sem IA (plano-modelo)", 0.0, None
     try:
-        out = brain.think(system, user, tier="decisao", purpose="ceo.plano", partner_id=pid, max_tokens=1400)
-        plan = validate_plan(out["data"])
+        out = brain.think(system, user, tier="decisao", purpose="ceo.plano", partner_id=pid, max_tokens=1400, validate=validate_plan)
+        plan = out["data"]
         cost = out["cost_usd"]
         brain_used = f"{out['provider']}:{out['model']}"
-        tools.append(("cerebro.decisao", "plano", f"{brain_used} · {'válido' if plan else 'resposta inválida → plano-modelo'}"))
+        tools.append(("cerebro.decisao", "plano", f"{brain_used} · válido"))
     except brain.BrainUnavailable as e:
         tools.append(("cerebro.decisao", "plano", e.message))
     source = "ia" if plan else "modelo_sem_ia"

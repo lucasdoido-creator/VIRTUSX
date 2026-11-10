@@ -184,3 +184,67 @@ def test_ideia_nova_nao_espera_o_dia_seguinte(admin, marina):
     assert nxt <= dbmod.iso()  # volta logo para a ideia pendente
     run_ceo()
     assert R.db.val("SELECT COUNT(*) FROM ventures WHERE status='recebida'") == 0
+
+
+def _claude_ok(calls):
+    def fake(payload):
+        calls.append(payload)
+        return {"content": [{"type": "text", "text": json.dumps({"resumo": "plano do Claude", "proximos_passos": [
+            {"titulo": "Pesquisar", "agente": "pesquisa", "prioridade": "media", "prazo_dias": 2}]})}],
+            "usage": {"input_tokens": 2000, "output_tokens": 500}}
+    return fake
+
+
+def test_gratis_primeiro_claude_nao_e_chamado_se_ollama_resolve(admin):
+    R.settings.anthropic_api_key = "chave-teste"
+    calls = []
+    brain.TRANSPORT["claude"] = _claude_ok(calls)
+    brain.TRANSPORT["ollama"] = ollama_reply({"resumo": "plano local", "proximos_passos": [
+        {"titulo": "Mapear concorrentes", "agente": "pesquisa", "prioridade": "alta", "prazo_dias": 2}]})
+    try:
+        run_ceo()
+        assert calls == []  # IA grátis resolveu
+        assert R.db.val("SELECT summary FROM ventures WHERE id='vnt_demo_natal'") == "plano local"
+        assert R.db.val("SELECT COALESCE(SUM(cost_usd),0) FROM brain_usage") == 0
+    finally:
+        R.settings.anthropic_api_key = ""
+
+
+def test_sobe_para_claude_so_quando_ollama_falha_e_respeita_teto_diario(admin):
+    R.settings.anthropic_api_key = "chave-teste"
+    calls = []
+    brain.TRANSPORT["claude"] = _claude_ok(calls)
+    brain.TRANSPORT["ollama"] = ollama_reply("isso não é json")  # resposta fraca da IA grátis
+    try:
+        run_ceo()
+        assert len(calls) == 1 and R.db.val("SELECT summary FROM ventures WHERE id='vnt_demo_natal'") == "plano do Claude"
+        R.settings.brain_daily_cap_usd = 0.0002  # já gastou ~0.00045 hoje
+        with R.db.tx() as c:
+            c.execute("INSERT INTO ventures(id,partner_id,idea,status,created_by,created_at,updated_at) VALUES "
+                      "('vnt3','prt_aurora','Linha de chás para inverno','recebida','teste',?,?)", (dbmod.iso(), dbmod.iso()))
+        run_ceo()
+        assert len(calls) == 1  # teto diário segurou
+        assert R.db.val("SELECT plan_source FROM ventures WHERE id='vnt3'") == "modelo_sem_ia"
+    finally:
+        R.settings.anthropic_api_key = ""
+        R.settings.brain_daily_cap_usd = 0.20
+
+
+def test_aviso_ao_chegar_em_80_por_cento(admin):
+    R.settings.anthropic_api_key = "chave-teste"
+    R.settings.brain_monthly_cap_usd = 0.001
+    calls = []
+    base = _claude_ok(calls)
+
+    def caro(payload):
+        r = base(payload)
+        r["usage"] = {"input_tokens": 2000, "output_tokens": 1300}  # US$ 0,00085 = 85% do teto
+        return r
+    brain.TRANSPORT["claude"] = caro
+    try:
+        run_ceo()
+        assert R.db.val("SELECT COUNT(*) FROM tasks WHERE pendency_type='orcamento_ia'") == 1
+        assert R.db.val("SELECT COUNT(*) FROM events WHERE type='cerebro.alerta_gasto'") == 1
+    finally:
+        R.settings.anthropic_api_key = ""
+        R.settings.brain_monthly_cap_usd = 2.0
