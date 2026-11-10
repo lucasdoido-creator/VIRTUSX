@@ -186,3 +186,56 @@ def seed_demo():
         yday = (now().astimezone(get_tz("America/Sao_Paulo")) - timedelta(days=1)).date().isoformat()
     closings.prepare(Principal("agent", "agt_financeiro", "financeiro_central", None, "Carla · Financeiro"), "vendas", "prt_aurora", "diario", yday)
     return True
+
+
+def seed_reference():
+    """Configuração mínima para ambientes reais (sandbox/produção): regiões, políticas e sinalizadores.
+    NÃO cria parceiros, clientes, produtos, usuários nem qualquer dado fictício."""
+    if R.db.val("SELECT value FROM meta WHERE key='reference_seeded'"):
+        return False
+    ts = iso()
+    with R.db.tx() as c:
+        regions = [
+            ("BR", "Brasil", "BRL", "pt-BR", "America/Sao_Paulo", 0, "Vendas de produtos não liberadas (decisão fiscal pendente).", "pendente",
+             "Regras fiscais pendentes.", "pendente", "pendente", "A definir", 7, {"flat_shipping_minor": 0}),
+            ("PT", "Portugal", "EUR", "pt-PT", "Europe/Lisbon", 0, "Não liberado.", "pendente", "Regras fiscais pendentes.", "pendente",
+             "pendente", "A definir", 14, {}),
+            ("US", "Estados Unidos", "USD", "en-US", "America/New_York", 0, "Não liberado.", "pendente", "Sales tax pendente.", "pendente",
+             "pendente", "A definir", 30, {}),
+        ]
+        for r in regions:
+            c.execute("INSERT OR IGNORE INTO regions(code,name,currency,locale,timezone,sales_enabled,sales_status_note,tax_mode,tax_status_note,"
+                      "payment_provider,logistics_provider,seller_entity,return_window_days,config_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      (*r[:13], dumps(r[13])))
+        for p in [("reembolso.executar", "revisao", "financeiro_central", "Reembolsos exigem aprovação."),
+                  ("atendimento.responder", "proibido", None, "Agente de atendimento não envia respostas."),
+                  ("pagamento.repasse", "revisao", "financeiro_central", "Repasses sempre revisados."),
+                  ("campanha.paga", "proibido", None, "Sem campanhas pagas automáticas.")]:
+            c.execute("INSERT OR IGNORE INTO policies(action,mode,approver_role,description,updated_by,updated_at) VALUES (?,?,?,?,?,?)",
+                      (*p, "referencia", ts))
+        c.execute("INSERT OR IGNORE INTO system_flags(key,value,updated_by,updated_at) VALUES ('agents_paused','0','referencia',?)", (ts,))
+        agents.ensure_agents(c)
+        c.execute("INSERT INTO meta(key,value) VALUES ('reference_seeded',?)", (ts,))
+    return True
+
+
+def needs_setup():
+    return R.db.val("SELECT COUNT(*) FROM users") == 0
+
+
+def create_first_admin(name, email, password):
+    """Só funciona enquanto não existe nenhum usuário (primeiro acesso do ambiente)."""
+    from .core import AppError, Conflict, Principal, audit
+    email = (email or "").strip().lower()
+    if len((name or "").strip()) < 2 or "@" not in email:
+        raise AppError("Informe nome e e-mail válidos")
+    if len(password or "") < 10:
+        raise AppError("A senha precisa ter pelo menos 10 caracteres", "senha_fraca")
+    with R.db.tx() as c:
+        if c.execute("SELECT COUNT(*) FROM users").fetchone()[0]:
+            raise Conflict("Administrador já criado", "setup_concluido")
+        uid = new_id("usr")
+        c.execute("INSERT INTO users(id,email,name,password_hash,role,partner_id,created_at) VALUES (?,?,?,?,?,?,?)",
+                  (uid, email, name.strip()[:120], hash_password(password), "admin_central", None, iso()))
+        audit(c, Principal("system", "setup"), "usuario.primeiro_admin", "user", uid, None, {"email": email})
+    return uid

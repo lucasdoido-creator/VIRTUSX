@@ -19,7 +19,12 @@
       <button class="btn primary">Entrar</button>
       <div id="loginErr" class="muted" role="alert"></div>
     </form>
-    <details class="card"><summary>Contas de demonstração (senha demo1234)</summary>
+    <form class="f card hidden" id="setupForm"><h3 style="margin:0">Primeiro acesso deste ambiente</h3>
+      <p class="muted">Crie o administrador. Isso só é possível uma vez; depois, novos acessos são criados em Cadastros.</p>
+      <label>Seu nome<input name="name" required></label><label>E-mail<input name="email" type="email" required></label>
+      <label>Senha (mín. 10 caracteres)<input name="password" type="password" minlength="10" required autocomplete="new-password"></label>
+      <button class="btn primary">Criar administrador</button></form>
+    <details class="card" id="demoAccounts"><summary>Contas de demonstração (senha demo1234)</summary>
       <div class="row" style="margin-top:6px">
         <button class="btn small" data-demo="admin@central.demo">Admin central</button>
         <button class="btn small" data-demo="ops@central.demo">Operações</button>

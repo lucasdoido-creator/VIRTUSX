@@ -27,9 +27,21 @@ async function boot() {
 }
 function setEnv(env) { const b = $("#envbar"); b.className = "envbar " + env; b.textContent = ENV_TEXT[env] || env; document.title = `[${env.toUpperCase()}] VIRTUSX`; }
 async function showLogin() {
-  try { const h = await (await fetch("/api/health")).json(); setEnv(h.environment); } catch {}
+  let env = "demo";
+  try { const h = await (await fetch("/api/health")).json(); env = h.environment; setEnv(env); } catch {}
   $("#login").classList.remove("hidden"); $("#app").classList.add("hidden");
-  $("#login form").onsubmit = async e => {
+  if (env !== "demo") $("#demoAccounts").classList.add("hidden");
+  try {
+    const st = (await (await fetch("/api/setup")).json()).data;
+    if (st && st.needed) {
+      $("#login form.f").classList.add("hidden"); const sf = $("#setupForm"); sf.classList.remove("hidden");
+      sf.onsubmit = async e => { e.preventDefault(); const f = new FormData(sf);
+        try { await api("/api/setup", { method: "POST", body: { name: f.get("name"), email: f.get("email"), password: f.get("password") } });
+          await api("/api/auth/login", { method: "POST", body: { email: f.get("email"), password: f.get("password") } }); location.reload(); }
+        catch (er) { toast(er.message, true); } };
+    }
+  } catch {}
+  $("#login form.f").onsubmit = async e => {
     e.preventDefault(); const f = new FormData(e.target);
     try { await api("/api/auth/login", { method: "POST", body: { email: f.get("email"), password: f.get("password") } }); location.reload(); }
     catch (er) { $("#loginErr").textContent = er.message; }
@@ -49,6 +61,8 @@ async function start() {
   setupSearch(); setupFilters();
   if (can("agents.pause")) $("#pauseWrap").classList.remove("hidden");
   $("#pause").onchange = e => act(() => api("/api/agents/pause", { method: "POST", body: { paused: e.target.checked } }), e.target.checked ? "Agentes pausados" : "Agentes retomados");
+  S.templates = await api("/api/task-templates").catch(() => ({}));
+  if (S.me.role === "tecnico") return startTecnico();
   S.world = await api("/api/world");
   try {
     S.renderer = new Renderer($("#gl"), { lite: S.lite });
@@ -64,6 +78,14 @@ async function start() {
   updateHeader();
   S.live = new Live({ onEvent, onState: liveState, onResync: () => { toast("Conexão restabelecida — dados sincronizados"); refresh(); } });
   S.live.start(S.world.last_event_id);
+}
+
+// Técnico/freelancer: sem mundo 3D nem dados de clientes; só as próprias tarefas, com checklist e evidências.
+function startTecnico() {
+  S.world = { partners: [], agents: [], regions: [], warehouses: [], sectors: [], service_bases: [] };
+  $("#viewSeg").classList.add("hidden"); $("#search").classList.add("hidden"); $("#live").classList.add("hidden");
+  S.tab = "tarefas"; setView("tabelas");
+  setInterval(() => { if (!S.panel) renderTables(true); }, 30000);
 }
 
 function setView(v) {
@@ -91,6 +113,10 @@ function liveState(s, lostAt) {
 }
 async function refresh() {
   try {
+    if (S.me.role === "tecnico") {  // técnico não tem visão do mundo: só recarrega a tarefa e a lista
+      if (S.panel && S.panel.reload) S.panel.reload();
+      return renderTables(true);
+    }
     S.world = await api("/api/world"); updateHeader();
     if (S.w) S.w.build(S.world);
     if (S.panel && S.panel.reload) S.panel.reload();
@@ -121,6 +147,7 @@ function select(kind, id, pick) {
   if (kind === "warehouse") return openWarehouse(id);
   if (kind === "agent") return openAgent(id);
   if (kind === "unit") return openUnit(pick.data);
+  if (kind === "base") return openBase(pick.data || S.world.service_bases.find(b => b.id === id));
   if (kind === "order") return openOrder(id);
   if (kind === "task") return openTask(id);
 }
@@ -190,10 +217,10 @@ const FLOOR_RENDER = {
       <div class="row" style="margin-top:6px"><button class="btn small" data-goto="${r.action.floor}" data-task="${r.action.task_id || ""}">${esc(r.action.label)}</button></div></div>`).join("")
       : `<p class="muted">Nenhum motivo registrado.</p>`),
   recepcao: b => { const p = b.partner, f = b.floors.recepcao;
-    return `<dl class="kv"><dt>Modelo comercial</dt><dd>${p.commercial_model === "central_commission" ? `Venda pela central · comissão ${(p.commission_rate_bp / 100).toFixed(2)}%` : "Revenda B2B (preparada, não operacional)"}</dd>
+    return `<dl class="kv"><dt>Modelo comercial</dt><dd>${p.commercial_model === "cliente_servico" ? `Cliente de serviços de TI · contrato ${p.contract_minor ? fmtMoney(p.contract_minor, p.currency) + "/mês" : "não cadastrado"}${p.segment ? " · " + esc(p.segment) : ""}` : p.commercial_model === "central_commission" ? `Venda pela central · comissão ${(p.commission_rate_bp / 100).toFixed(2)}%` : "Revenda B2B (preparada, não operacional)"}</dd>
       <dt>Vendedor no checkout</dt><dd>${esc(p.seller_entity)}</dd><dt>Responsável</dt><dd>${esc(p.contact_name || "—")}</dd>
       <dt>Fuso / moeda</dt><dd>${esc(p.timezone)} · ${esc(p.currency)}</dd><dt>Situação</dt><dd>${st(b.status.level)}</dd></dl>
-      <h4>Unidades</h4>${f.units.map(u => `<div class="card"><b>${esc(u.name)}</b> — ${esc(u.city || "")}/${esc(u.state || "")} ${u.location_status === "confirmada"
+      <h4>Unidades</h4>${f.units.map(u => `<div class="card"><b>${esc(u.name)}</b> — ${esc(u.city || "")}/${esc(u.state || "")} ${u.base_name ? badge("atendida por " + u.base_name) : ""} ${u.active === 0 ? badge("inativa", "warn") : ""} ${u.location_status === "confirmada"
         ? badge("localização confirmada", "ok") + `<div class="muted">${esc(u.location_source || "")}</div>` : badge("localização não confirmada", "warn") + `<div class="muted">Posição no 3D é ilustrativa.</div>`}</div>`).join("")}
       <h4>Avisos</h4>${f.avisos.length ? `<ul>${f.avisos.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : `<p class="muted">Sem avisos.</p>`}
       <h4>Responsáveis</h4>${f.responsaveis.map(u => `<div>${esc(u.name)} <span class="muted">${esc(u.role)}</span></div>`).join("")}`; },
@@ -202,6 +229,7 @@ const FLOOR_RENDER = {
         <div class="muted mono">/loja/${esc(s.slug)}</div><div class="row" style="margin-top:6px">
         ${s.published ? `<a class="btn small" href="/loja/${esc(s.slug)}" target="_blank" rel="noopener">Abrir loja</a>` : ""}
         ${w ? `<button class="btn small" data-pub="${s.id}" data-val="${s.published ? 0 : 1}">${s.published ? "Despublicar" : "Publicar"}</button>` : ""}</div></div>`).join("") || `<p class="muted">Nenhuma página criada.</p>`}
+      ${b.partner.commercial_model === "cliente_servico" ? `<div class="card muted">Cliente de serviços: sem loja/vitrine. Use Operação (tarefas e checklists) e Financeiro (fechamento mensal).</div>` : ""}
       ${w && b.partner.commercial_model === "central_commission" ? `<details class="card" ${f.storefronts.length ? "" : "open"}><summary><b>Criar página a partir do template</b></summary>
         <form class="f" id="sfForm"><label>Endereço (slug)<input name="slug" required pattern="[a-z0-9][a-z0-9\\-]{1,48}[a-z0-9]" placeholder="minha-loja"></label>
         <label>Título<input name="title" required value="${esc(b.partner.name.replace(" (DEMO)", ""))}"></label>
@@ -220,7 +248,7 @@ const FLOOR_RENDER = {
       <dt>Vendas confirmadas</dt><dd>${fmtMoney(f.vendas_minor, cur)}</dd><dt>Taxas de pagamento</dt><dd>${fmtMoney(f.taxas_minor, cur)} <span class="muted">(custo da central)</span></dd>
       <dt>Comissões a receber</dt><dd>${fmtMoney(f.a_receber_minor, cur)}</dd><dt>Comissões pagas</dt><dd>${fmtMoney(f.pago_minor, cur)}</dd></dl>` : "") +
       `<h4>Fechamentos</h4><p class="muted">Conferência, aprovação e liquidação são estados separados. Aprovado não significa transferido.</p>
-      ${can("closings.prepare") ? `<form class="f card" id="clForm"><div class="row"><select name="kind"><option value="vendas">Vendas</option><option value="comissoes">Comissões</option><option value="conciliacao_pagamentos">Conciliação de pagamentos</option></select>
+      ${can("closings.prepare") ? `<form class="f card" id="clForm"><div class="row"><select name="kind"><option value="vendas">Vendas</option><option value="comissoes">Comissões</option><option value="conciliacao_pagamentos">Conciliação de pagamentos</option><option value="servicos" ${b.partner.commercial_model === "cliente_servico" ? "selected" : ""}>Serviços (mensal do cliente)</option></select>
         <select name="period_type"><option value="diario">Diário</option><option value="semanal">Semanal</option><option value="mensal">Mensal</option></select>
         <input type="date" name="local_day" required value="${new Date().toLocaleDateString("sv-SE", { timeZone: b.partner.timezone })}"><button class="btn small primary">Preparar</button></div>
         <div class="muted">Período no fuso ${esc(b.partner.timezone)}</div></form>` : ""}
@@ -252,7 +280,8 @@ function bindFloor(f, b) {
       config: { headline: d.get("headline"), accent: d.get("accent") }, product_ids: d.getAll("p") } }), "Página criada");
     if (d.get("publish")) await act(() => api(`/api/storefronts/${r.id}`, { method: "PATCH", body: { published: true } }), "Página publicada"); };
   const tf = $("#taskForm"); if (tf) tf.onsubmit = async e => { e.preventDefault(); const d = new FormData(tf); const [atype, aid] = (d.get("assignee") || ":").split(":");
-    await act(() => api("/api/tasks", { method: "POST", body: { title: d.get("title"), description: d.get("description"), partner_id: b.partner.id, unit_id: d.get("unit_id") || null,
+    if (!d.get("title") && !d.get("template")) return toast("Informe um título ou escolha um modelo de checklist", true);
+    await act(() => api("/api/tasks", { method: "POST", body: { title: d.get("title") || null, template: d.get("template") || null, description: d.get("description"), partner_id: b.partner.id, unit_id: d.get("unit_id") || null,
       assignee_type: atype || null, assignee_id: aid || null, priority: d.get("priority"), due_at: d.get("due") ? new Date(d.get("due")).toISOString() : null,
       recurrence_rule: d.get("recurrence") || null, kind: d.get("kind") } }), "Tarefa criada"); };
   const idf = $("#ideaForm"); if (idf) idf.onsubmit = async e => { e.preventDefault(); const d = new FormData(idf);
@@ -264,7 +293,8 @@ function bindFloor(f, b) {
 }
 function taskForm(b) {
   const people = [...b.floors.equipe.pessoas, ...(b.floors.equipe.central || [])];
-  return `<form class="f" id="taskForm"><label>Título<input name="title" required maxlength="200"></label><label>Descrição<textarea name="description" rows="2"></textarea></label>
+  return `<form class="f" id="taskForm"><label>Título (opcional com modelo)<input name="title" maxlength="200"></label><label>Descrição<textarea name="description" rows="2"></textarea></label>
+    <label>Modelo de checklist<select name="template"><option value="">— nenhum —</option>${Object.entries(S.templates || {}).map(([k, t]) => `<option value="${k}">${esc(t.title)} (${t.items.length} itens)</option>`).join("")}</select></label>
     <div class="row"><label>Tipo<select name="kind"><option value="tarefa">Tarefa</option><option value="pendencia">Pendência</option></select></label>
     <label>Unidade<select name="unit_id"><option value="">—</option>${b.floors.recepcao.units.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
     <label>Prioridade<select name="priority"><option>baixa</option><option selected>media</option><option>alta</option><option>critica</option></select></label></div>
@@ -281,13 +311,13 @@ function ordersTable(rows) {
 function tasksTable(rows) {
   if (!rows.length) return `<p class="muted">Nenhuma tarefa.</p>`;
   return `<table class="t"><thead><tr><th>Tarefa</th><th>Status</th><th>Responsável</th><th>Prazo</th></tr></thead><tbody>${rows.map(t =>
-    `<tr class="click" data-task-open="${t.id}"><td>${esc(t.title)} ${t.overdue ? badge("atrasada", "bad") : ""}</td><td>${esc(TASK_STATES[t.status])}</td><td>${t.assignee_type === "agente" ? "🤖 " : ""}${esc(t.assignee_id || "—")}</td><td>${fmtTime(t.due_at)}</td></tr>`).join("")}</tbody></table>`;
+    `<tr class="click" data-task-open="${t.id}"><td>${esc(t.title)} ${t.overdue ? badge("atrasada", "bad") : ""}</td><td>${esc(TASK_STATES[t.status])}</td><td>${t.assignee_type === "agente" ? "🤖 " : ""}${esc(t.assignee_name || "—")}</td><td>${fmtTime(t.due_at)}</td></tr>`).join("")}</tbody></table>`;
 }
 function closingCard(c) {
   const t = c.totals, cur = c.currency; const flow = ["preparado", "conferido", "aprovado", "encerrado"];
   const next = { preparado: "Conferir", conferido: "Aprovar", aprovado: "Encerrar" }[c.status];
   const totals = Object.entries(t).map(([k, v]) => `<dt>${esc(k.replace(/_minor$/, "").replace(/_/g, " "))}</dt><dd>${k.endsWith("_minor") ? fmtMoney(v, cur) : esc(v)}</dd>`).join("");
-  return `<div class="card"><h4>${esc({ vendas: "Vendas", comissoes: "Comissões", conciliacao_pagamentos: "Conciliação de pagamentos" }[c.kind])} · ${esc(c.local_label)} · rev. ${c.revision}
+  return `<div class="card"><h4>${esc({ vendas: "Vendas", comissoes: "Comissões", conciliacao_pagamentos: "Conciliação de pagamentos", servicos: "Serviços do mês" }[c.kind])} · ${esc(c.local_label)} · rev. ${c.revision}
     ${c.is_demo ? badge("teste/demo", "sim") : ""} ${c.superseded_by_id ? badge("substituída", "warn") : ""}</h4>
     <div class="row">${flow.map(s => badge(s, s === c.status ? "ok" : "")).join(" → ")} · liquidação: ${badge({ nao_aplicavel: "não se aplica", pendente: "pendente (sem transferência)", liquidado: "liquidado" }[c.settlement_status] || c.settlement_status, c.settlement_status === "liquidado" ? "ok" : "")}</div>
     <dl class="kv" style="margin-top:6px">${totals}</dl>
@@ -369,17 +399,23 @@ async function openTask(id) {
   const agentsList = S.world.agents.filter(a => a.enabled);
   openPanel({ title: esc(t.title), sub: `${esc(TASK_STATES[t.status])} · ${badge(t.priority)} ${t.overdue ? badge("atrasada", "bad") : ""} ${t.is_demo ? badge("demonstração", "sim") : ""}`, reload: () => openTask(id), html: `
     <p>${esc(t.description || "")}</p>
-    <dl class="kv"><dt>Tipo</dt><dd>${esc(t.kind)} ${t.pendency_type ? "· " + esc(t.pendency_type) : ""}</dd><dt>Responsável</dt><dd>${esc(t.assignee_type || "")} ${esc(t.assignee_id || "—")}</dd>
+    ${t.checklist ? `<div class="card"><h4>Checklist ${t.checklist.filter(i => i.done).length}/${t.checklist.length}</h4>${t.checklist.map((i, n) =>
+      `<label class="row" style="margin:3px 0"><input type="checkbox" data-ck="${n}" ${i.done ? "checked" : ""} ${["concluida", "cancelada"].includes(t.status) || !can("tasks.write") ? "disabled" : ""}>
+       <span>${esc(i.item)}</span>${i.done ? `<span class="muted"> · ${esc(i.by_name || i.by || "")} ${fmtTime(i.at)}</span>` : ""}</label>`).join("")}
+      <div class="muted">A tarefa só pode ser concluída com todos os itens marcados.</div></div>` : ""}
+    <dl class="kv"><dt>Tipo</dt><dd>${esc(t.kind)} ${t.pendency_type ? "· " + esc(t.pendency_type) : ""}</dd><dt>Responsável</dt><dd>${esc(t.assignee_name || "—")} ${t.assignee_type === "agente" ? badge("agente de IA") : ""}</dd>
     <dt>Prazo</dt><dd>${fmtTime(t.due_at)}</dd><dt>Origem</dt><dd>${esc(t.source || "")}</dd><dt>Dependências</dt><dd>${t.depends_on.map(esc).join(", ") || "—"}</dd>
-    <dt>Concluída por</dt><dd>${t.completed_by ? `${esc(t.completed_by)} em ${fmtTime(t.completed_at)}` : "—"}</dd></dl>
+    <dt>Concluída por</dt><dd>${t.completed_by ? `${esc(t.completed_by_name || t.completed_by)} em ${fmtTime(t.completed_at)}` : "—"}</dd></dl>
     ${can("tasks.write") ? `<form class="f card" id="tEdit"><div class="row"><label>Status<select name="status">${Object.entries(TASK_STATES).map(([k, v]) => `<option value="${k}" ${k === t.status ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-      <label>Atribuir a agente<select name="agent"><option value="">— manter —</option>${agentsList.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select></label></div>
+      <label class="${S.me.role === "tecnico" ? "hidden" : ""}">Atribuir a agente<select name="agent"><option value="">— manter —</option>${agentsList.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join("")}</select></label></div>
       <label>Comentário<textarea name="note" rows="2"></textarea></label><button class="btn primary small">Salvar</button></form>
       <form class="f card" id="tFile"><label>Anexar documento (PDF, imagem, CSV, TXT, DOCX, XLSX · até 10 MB)<input type="file" name="file" required></label>
       <label class="row"><input type="checkbox" name="ev"> Evidência de conclusão</label><button class="btn small">Enviar anexo</button></form>` : ""}
     <h4>Anexos</h4>${t.attachments.map(a => `<div><a href="/api/attachments/${a.id}">${esc(a.filename)}</a> ${a.is_evidence ? badge("evidência", "ok") : ""} <span class="muted mono">sha256 ${a.sha256.slice(0, 12)}… · ${esc(a.uploaded_by)}</span></div>`).join("") || `<p class="muted">Nenhum.</p>`}
     <h4>Comentários</h4>${t.comments.map(c => `<div class="card"><div class="muted">${esc(c.author)} · ${fmtTime(c.created_at)}</div><div style="white-space:pre-wrap">${esc(c.body)}</div></div>`).join("") || `<p class="muted">Nenhum.</p>`}
     <h4>Histórico</h4><ul class="timeline">${t.history.map(h => `<li>${esc(h.field)}: ${esc(h.old ?? "")} → ${esc(h.new ?? "")}<div class="muted">${esc(h.actor)} · ${fmtTime(h.at)}</div></li>`).join("")}</ul>` });
+  $("#pBody").querySelectorAll("[data-ck]").forEach(x => x.onchange = () =>
+    api(`/api/tasks/${id}/checklist`, { method: "POST", body: { index: +x.dataset.ck, done: x.checked } }).then(() => openTask(id)).catch(er => { toast(er.message, true); openTask(id); }));
   const f = $("#tEdit"); if (f) f.onsubmit = e => { e.preventDefault(); const d = new FormData(f); const body = { status: d.get("status") };
     if (d.get("note")) body.note = d.get("note"); if (d.get("agent")) { body.assignee_type = "agente"; body.assignee_id = d.get("agent"); }
     act(() => api(`/api/tasks/${id}`, { method: "PATCH", body }), "Tarefa atualizada"); };
@@ -397,6 +433,17 @@ function openRegion(code) {
       <div class="muted">${p.units.map(u => `${esc(u.name)} (${esc(u.city || "")}/${esc(u.state || "")} · ${u.location_status === "confirmada" ? "local confirmado" : "local não confirmado"})`).join(" · ")}</div></div>`).join("")}` });
   $("#pBody").querySelectorAll("[data-p]").forEach(x => x.onclick = () => select("partner", x.dataset.p));
 }
+function openBase(b) {
+  if (!b) return;
+  const clients = [...new Set(b.units.map(u => u.partner_id))].map(id => S.world.partners.find(p => p.id === id)).filter(Boolean);
+  openPanel({ title: `Base · ${esc(b.name)}`, sub: `${esc(b.city || "")}/${esc(b.state || "")} ${b.location_status === "confirmada" ? badge("endereço confirmado", "ok") : badge("posição ilustrativa")}`,
+    html: `<dl class="kv"><dt>Técnicos ativos</dt><dd>${b.tecnicos}</dd><dt>Aguardando autorização</dt><dd>${b.pendentes}</dd><dt>Unidades atendidas</dt><dd>${b.units.length}</dd></dl>
+    <h4>Clientes atendidos</h4>${clients.map(p => `<div class="card click" data-p="${p.id}" style="cursor:pointer">${st(p.status.level)} ${esc(p.name)}</div>`).join("") || `<p class="muted">Nenhuma unidade vinculada ainda.</p>`}
+    ${can("cadastros.read") ? `<button class="btn small" id="goCad">Abrir cadastros</button>` : ""}` });
+  $("#pBody").querySelectorAll("[data-p]").forEach(x => x.onclick = () => select("partner", x.dataset.p));
+  const g = $("#goCad"); if (g) g.onclick = () => { closePanel(); S.tab = "cadastros"; setView("tabelas"); };
+}
+
 function openUnit(u) {
   openPanel({ title: esc(u.name), sub: esc(u.partner), html: `<dl class="kv"><dt>Cidade/estado</dt><dd>${esc(u.city || "—")}/${esc(u.state || "—")} · ${esc(u.country)}</dd>
     <dt>Localização</dt><dd>${u.location_status === "confirmada" ? badge("confirmada", "ok") + " " + esc(u.location_source || "") : badge("não confirmada", "warn") + " A posição no ambiente 3D é apenas ilustrativa."}</dd></dl>` });
@@ -438,10 +485,11 @@ async function openSector(code) {
 }
 
 // ------------------------------------------------------------------ modo tabelas
-const TABLE_TABS = [["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
+const TABLE_TABS = [["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
   ["aprovacoes", "Aprovações"], ["estoque", "Estoque"], ["eventos", "Eventos"], ["webhooks", "Webhooks"], ["auditoria", "Auditoria"], ["politicas", "Políticas"]];
 async function renderTables(soft) {
-  const tabs = TABLE_TABS.filter(([k]) => S.me.is_central || ["visao", "pedidos", "tarefas", "agentes", "fechamentos", "eventos"].includes(k));
+  const tabs = S.me.role === "tecnico" ? [["tarefas", "Minhas tarefas"]] :
+    TABLE_TABS.filter(([k]) => (S.me.is_central && (k !== "cadastros" || can("cadastros.read"))) || ["visao", "pedidos", "tarefas", "agentes", "fechamentos", "eventos"].includes(k));
   $("#tTabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" aria-selected="${k === S.tab}" data-t="${k}">${v}</button>`).join("");
   $("#tTabs").querySelectorAll("button").forEach(b => b.onclick = () => { S.tab = b.dataset.t; $("#tFilter").value = ""; renderTables(); });
   const body = $("#tBody"); if (!soft) body.innerHTML = `<p class="muted">Carregando…</p>`;
@@ -455,6 +503,7 @@ async function renderTables(soft) {
     if (onClick) body.querySelectorAll("tr[data-i]").forEach(tr => tr.onclick = () => onClick(rows[+tr.dataset.i]));
   };
   try {
+    if (S.tab === "cadastros") return renderCadastros(body);
     if (S.tab === "visao") grid([["name", "Parceiro"], ["region", "Região"], ["status", "Sinalização", r => st(r.status)], ["model", "Modelo"], ["overdue_tasks", "Tarefas atrasadas"],
       ["pending_closings", "Fechamentos pendentes"], ["failed_integrations", "Integrações com falha"], ["sales", "Vendas confirmadas"], ["is_demo", "Ambiente", r => r.is_demo ? badge("demo", "sim") : ""]],
       await api("/api/overview"), r => select("partner", r.id));
@@ -462,7 +511,7 @@ async function renderTables(soft) {
       ["region_code", "Região"], ["total_minor", "Total", r => fmtMoney(r.total_minor, r.currency)], ["customer_name", "Cliente"], ["created_at", "Criado", r => fmtTime(r.created_at)]],
       await api("/api/orders"), r => openOrder(r.id));
     if (S.tab === "tarefas") grid([["title", "Título", r => esc(r.title) + (r.overdue ? " " + badge("atrasada", "bad") : "")], ["kind", "Tipo"], ["status", "Status", r => esc(TASK_STATES[r.status])],
-      ["priority", "Prioridade"], ["partner_id", "Parceiro"], ["assignee_id", "Responsável"], ["due_at", "Prazo", r => fmtTime(r.due_at)]], await api("/api/tasks"), r => openTask(r.id));
+      ["priority", "Prioridade"], ["partner_id", "Cliente/parceiro"], ["assignee_name", "Responsável"], ["due_at", "Prazo", r => fmtTime(r.due_at)]], await api("/api/tasks"), r => openTask(r.id));
     if (S.tab === "agentes") grid([["name", "Agente"], ["role", "Função"], ["status", "Status", r => badge(AGENT_LABEL[r.status] || r.status)], ["status_since", "Desde", r => fmtTime(r.status_since)],
       ["current_task", "Tarefa atual", r => esc(r.current_task ? r.current_task.title : "—")], ["last_confirmed_at", "Última confirmação", r => fmtTime(r.last_confirmed_at)],
       ["last_run", "Último resultado", r => esc(r.last_run ? r.last_run.summary : "—")], ["month_spend_minor", "Custo mês", r => fmtMoney(r.month_spend_minor, r.budget_currency)]],
@@ -488,6 +537,75 @@ async function renderTables(soft) {
     body.querySelectorAll("[data-rq]").forEach(b => b.onclick = e => { e.stopPropagation(); act(() => api(`/api/webhooks/inbox/${b.dataset.rq}/requeue`, { method: "POST" }), "Reprocessado"); });
     body.querySelectorAll("[data-rp]").forEach(b => b.onclick = async e => { e.stopPropagation(); const r = await act(() => api("/api/demo/replay-webhook", { method: "POST", body: { inbox_id: b.dataset.rp } })); toast("Resultado: " + r.status); });
   } catch (e) { body.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+}
+
+// ------------------------------------------------------------------ cadastros (operação real)
+const ROLE_LABEL = { admin_central: "Administrador", operacoes_central: "Operações", financeiro_central: "Financeiro",
+  parceiro_admin: "Cliente (gestor)", parceiro_operador: "Cliente (operador)", tecnico: "Técnico / freelancer" };
+async function renderCadastros(body) {
+  const d = await api("/api/cadastros"); const w = can("cadastros.write");
+  const opt = (arr, sel, lbl) => arr.map(x => `<option value="${x.id}" ${x.id === sel ? "selected" : ""}>${esc(lbl(x))}</option>`).join("");
+  const pend = d.users.filter(u => u.role === "tecnico" && !u.active);
+  body.innerHTML = `
+  ${pend.length ? `<div class="card"><h4>Freelancers aguardando sua autorização (${pend.length})</h4>${pend.map(u => `<div class="row">${esc(u.name)} · ${esc(u.email)} · base ${esc(u.base_name || "—")}
+    ${w ? `<button class="btn small primary" data-auth="${u.id}">Autorizar</button>` : ""}</div>`).join("")}</div>` : ""}
+  <div class="card"><h4>Bases / filiais (${d.bases.length})</h4>
+    <table class="t"><thead><tr><th>Nome</th><th>Cidade</th><th>Localização</th><th>Situação</th><th></th></tr></thead><tbody>${d.bases.map(b => `<tr><td>${esc(b.name)}</td><td>${esc(b.city)}/${esc(b.state || "")}</td>
+      <td>${b.location_status === "confirmada" ? badge("confirmada", "ok") : badge("não confirmada", "warn")}</td><td>${b.active ? "ativa" : badge("inativa", "warn")}</td>
+      <td>${w ? `<button class="btn small" data-edit="base" data-id="${b.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
+    ${w ? `<form class="f" data-form="base"><input type="hidden" name="id"><div class="row"><label>Nome<input name="name" required></label><label>Cidade<input name="city" required></label>
+      <label>UF<input name="state" maxlength="2" value="SP" size="3"></label><label>Endereço<input name="address"></label>
+      <label class="row"><input type="checkbox" name="location_confirmed"> endereço confirmado</label><label class="row"><input type="checkbox" name="active" checked> ativa</label>
+      <button class="btn primary small">Salvar base</button></div></form>` : ""}</div>
+  <div class="card"><h4>Clientes (${d.clients.length})</h4>
+    <table class="t"><thead><tr><th>Cliente</th><th>Segmento</th><th>Contrato/mês</th><th>Contato</th><th>Situação</th><th></th></tr></thead><tbody>${d.clients.map(c => `<tr><td>${esc(c.name)}</td><td>${esc(c.segment || "")}</td>
+      <td>${c.contract_minor != null ? fmtMoney(c.contract_minor, "BRL") : "—"}</td><td>${esc(c.contact_name || "")}</td><td>${esc(c.status)}</td>
+      <td>${w ? `<button class="btn small" data-edit="client" data-id="${c.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
+    ${w ? `<form class="f" data-form="client"><input type="hidden" name="id"><div class="row"><label>Nome<input name="name" required></label><label>Razão social<input name="legal_name"></label>
+      <label>Segmento<input name="segment" placeholder="ex.: clínica, escritório, escola"></label><label>Contrato mensal (R$)<input name="contract" inputmode="decimal" placeholder="1.500,00"></label>
+      <label>Contato<input name="contact_name"></label><label class="row"><input type="checkbox" name="active" checked> ativo</label></div>
+      <label>Observações<textarea name="notes" rows="2"></textarea></label><button class="btn primary small">Salvar cliente</button></form>` : ""}</div>
+  <div class="card"><h4>Unidades dos clientes (${d.units.length})</h4>
+    <table class="t"><thead><tr><th>Cliente</th><th>Unidade</th><th>Cidade</th><th>Atendida por</th><th>Localização</th><th></th></tr></thead><tbody>${d.units.map(u => `<tr><td>${esc(u.partner_name)}</td><td>${esc(u.name)}${u.active ? "" : " " + badge("inativa", "warn")}</td>
+      <td>${esc(u.city || "")}/${esc(u.state || "")}</td><td>${esc(u.base_name || "—")}</td><td>${u.location_status === "confirmada" ? badge("confirmada", "ok") : badge("não confirmada", "warn")}</td>
+      <td>${w ? `<button class="btn small" data-edit="unit" data-id="${u.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
+    ${w && d.clients.length ? `<form class="f" data-form="unit"><input type="hidden" name="id"><div class="row"><label>Cliente<select name="client_id">${opt(d.clients, null, c => c.name)}</select></label>
+      <label>Nome da unidade<input name="name" required></label><label>Cidade<input name="city" required></label><label>UF<input name="state" maxlength="2" value="SP" size="3"></label>
+      <label>Endereço<input name="address"></label><label>Base que atende<select name="base_id"><option value="">—</option>${opt(d.bases.filter(b => b.active), null, b => b.name)}</select></label>
+      <label class="row"><input type="checkbox" name="location_confirmed"> endereço confirmado</label><label class="row"><input type="checkbox" name="active" checked> ativa</label>
+      <button class="btn primary small">Salvar unidade</button></div></form>` : w ? `<p class="muted">Cadastre um cliente primeiro.</p>` : ""}</div>
+  <div class="card"><h4>Equipe e acessos (${d.users.length})</h4>
+    <table class="t"><thead><tr><th>Nome</th><th>E-mail</th><th>Papel</th><th>Vínculo</th><th>Situação</th><th></th></tr></thead><tbody>${d.users.map(u => `<tr><td>${esc(u.name)}</td><td>${esc(u.email)}</td>
+      <td>${esc(ROLE_LABEL[u.role] || u.role)}</td><td>${esc(u.partner_name || u.base_name || "central")}</td><td>${u.active ? "ativo" : badge(u.role === "tecnico" ? "aguardando autorização" : "inativo", "warn")}</td>
+      <td>${w ? `<button class="btn small" data-edit="user" data-id="${u.id}">Editar</button>` : ""}</td></tr>`).join("")}</tbody></table>
+    ${w ? `<form class="f" data-form="user"><input type="hidden" name="id"><div class="row"><label>Nome<input name="name" required></label><label>E-mail<input name="email" type="email" required></label>
+      <label>Papel<select name="role">${d.roles.map(r => `<option value="${r}">${esc(ROLE_LABEL[r] || r)}</option>`).join("")}</select></label>
+      <label>Cliente (p/ acesso de cliente)<select name="partner_id"><option value="">—</option>${opt(d.clients, null, c => c.name)}</select></label>
+      <label>Base (p/ técnico)<select name="base_id"><option value="">—</option>${opt(d.bases, null, b => b.name)}</select></label>
+      <label>Senha (mín. 10; em edição, só se for trocar)<input name="password" type="password" minlength="10" autocomplete="new-password"></label>
+      <label class="row"><input type="checkbox" name="active" checked> ativo/autorizado</label><button class="btn primary small">Salvar acesso</button></div></form>` : ""}</div>`;
+  const ROUTE = { base: "bases", client: "clientes", unit: "unidades", user: "usuarios" };
+  const SRC = { base: d.bases, client: d.clients, unit: d.units, user: d.users };
+  body.querySelectorAll("form[data-form]").forEach(f => f.onsubmit = async e => {
+    e.preventDefault(); const k = f.dataset.form, fd = new FormData(f), data = {};
+    for (const [n, v] of fd.entries()) if (n !== "id") data[n] = v;
+    for (const cb of f.querySelectorAll("input[type=checkbox]")) data[cb.name] = cb.checked;
+    if (k === "user") data.authorize_now = data.active;
+    const id = fd.get("id");
+    await act(() => api(`/api/cadastros/${ROUTE[k]}${id ? "/" + id : ""}`, { method: id ? "PUT" : "POST", body: data }), "Cadastro salvo");
+    renderTables();
+  });
+  body.querySelectorAll("[data-edit]").forEach(bt => bt.onclick = () => {
+    const k = bt.dataset.edit, x = SRC[k].find(r => r.id === bt.dataset.id), f = body.querySelector(`form[data-form=${k}]`); if (!x || !f) return;
+    const val = { ...x, contract: x.contract_minor != null ? (x.contract_minor / 100).toFixed(2).replace(".", ",") : "", client_id: x.partner_id,
+      location_confirmed: x.location_status === "confirmada", active: k === "client" ? x.status === "ativo" : !!x.active };
+    for (const el of f.elements) { if (!el.name || !(el.name in val) && el.name !== "id") continue;
+      if (el.type === "checkbox") el.checked = !!val[el.name]; else if (el.name !== "password") el.value = val[el.name] ?? ""; }
+    f.querySelector("[name=id]").value = x.id; f.scrollIntoView({ behavior: motion.reduced ? "auto" : "smooth", block: "center" }); f.querySelector("button").textContent = "Salvar alterações";
+  });
+  body.querySelectorAll("[data-auth]").forEach(bt => bt.onclick = async () => { const u = d.users.find(x => x.id === bt.dataset.auth);
+    await act(() => api(`/api/cadastros/usuarios/${u.id}`, { method: "PUT", body: { name: u.name, email: u.email, role: u.role, base_id: u.base_id, active: true } }), "Freelancer autorizado");
+    renderTables(); });
 }
 
 // ------------------------------------------------------------------ busca e filtros

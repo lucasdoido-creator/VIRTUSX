@@ -69,6 +69,11 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/api/health && break; sleep 1; done
           mkdir -p /tmp/shots
           node scripts/e2e.mjs http://127.0.0.1:8000 /tmp/shots
+      - name: E2E da operação real (produção limpa)
+        run: |
+          (cd server && APP_ENV=production DATA_DIR=/tmp/prod-data setsid python -m uvicorn app.main:create_app --factory --port 8001 > /tmp/server-prod.log 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8001/api/health && break; sleep 1; done
+          node scripts/e2e_producao.mjs http://127.0.0.1:8001 /tmp/shots
       - if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -76,6 +81,7 @@ jobs:
           path: |
             /tmp/shots
             /tmp/server.log
+            /tmp/server-prod.log
 
   notificar:
     name: Notificar falha

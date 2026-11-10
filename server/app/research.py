@@ -95,6 +95,18 @@ def internal_snapshot(partner_id):
     prods = R.db.all("SELECT pr.name, rp.price_minor, rp.unit_cost_minor FROM partner_products pp JOIN products pr ON pr.id=pp.product_id "
                      "JOIN product_regions rp ON rp.product_id=pr.id AND rp.region_code=? WHERE pp.partner_id=? AND pp.authorized=1",
                      p["region_code"], partner_id)
+    if p["commercial_model"] == "cliente_servico":
+        since = iso(now() - timedelta(days=30))
+        return {"cliente": p["name"], "segmento": p["segment"], "regiao": p["region_name"], "moeda": p["currency"], "modelo": "cliente_servico",
+                "contrato_mensal_minor": p["contract_minor"],
+                "unidades": R.db.val("SELECT COUNT(*) FROM partner_units WHERE partner_id=? AND active=1", partner_id),
+                "servicos_concluidos_30d": R.db.val("SELECT COUNT(*) FROM tasks WHERE partner_id=? AND status='concluida' AND completed_at>=?", partner_id, since),
+                "chamados_30d": R.db.val("SELECT COUNT(*) FROM tasks WHERE partner_id=? AND template='chamado_ti' AND created_at>=?", partner_id, since),
+                "tarefas_abertas": R.db.val("SELECT COUNT(*) FROM tasks WHERE partner_id=? AND status NOT IN ('concluida','cancelada') "
+                                            "AND (recurrence_rule IS NULL OR recurrence_parent_id IS NOT NULL)", partner_id),
+                "atrasadas": R.db.val("SELECT COUNT(*) FROM tasks WHERE partner_id=? AND status NOT IN ('concluida','cancelada') AND due_at<?", partner_id, iso()),
+                "produtos_autorizados": [], "pedidos_abertos": 0,
+                "previsao": {"ok": False, "motivo": "cliente de serviços: receita = contrato mensal (sem previsão de vendas)"}}
     from .commerce import available_qty
     pids = R.db.all("SELECT product_id FROM partner_products WHERE partner_id=? AND authorized=1", partner_id)
     return {"parceiro": p["name"], "regiao": p["region_name"], "moeda": p["currency"], "modelo": p["commercial_model"],

@@ -101,13 +101,14 @@ def scrub(text: str) -> str:
 ROLE_PERMS = {
     "admin_central": {"*"},
     "operacoes_central": {
-        "ventures.read",
+        "ventures.read", "cadastros.read",
         "orders.read", "orders.read_pii", "orders.cancel", "shipments.create", "inventory.read",
         "partners.read", "tasks.read", "tasks.write", "agents.read", "agents.run", "events.read",
         "closings.read", "apps.read", "storefronts.read", "returns.create", "audit.read",
         "approvals.read", "world.read", "catalog.read",
     },
     "financeiro_central": {
+        "cadastros.read",
         "orders.read", "orders.read_pii", "partners.read", "commissions.read", "closings.read",
         "closings.prepare", "closings.review", "closings.approve", "closings.close", "closings.reopen",
         "closings.settle", "approvals.read", "approvals.decide", "tasks.read", "tasks.write", "events.read",
@@ -119,6 +120,8 @@ ROLE_PERMS = {
         "closings.read", "closings.review", "commissions.read", "apps.read", "partners.read",
         "events.read", "agents.read", "world.read", "catalog.read", "inventory.read",
     },
+    # Freelancer/técnico autorizado: só as tarefas atribuídas a ele (checklists, comentários, evidências).
+    "tecnico": {"tasks.read", "tasks.write", "tasks.own_only"},
     "parceiro_operador": {
         "ventures.read",
         "orders.read", "storefronts.read", "tasks.read", "tasks.write", "apps.read", "partners.read",
@@ -160,8 +163,10 @@ class Principal:
             raise Forbidden("Acesso restrito aos dados do próprio parceiro", "isolamento_parceiro")
 
     def partner_scope(self):
-        """None = todos (central); caso contrário, id do parceiro."""
-        return None if self.is_central else self.partner_id
+        """None = todos (central); caso contrário, id do parceiro. Técnico sem parceiro recebe escopo vazio."""
+        if self.is_central:
+            return None
+        return self.partner_id or "__nenhum__"
 
 
 SYSTEM = Principal("system", "sistema", "admin_central", None, "Sistema")

@@ -48,7 +48,9 @@ export class World {
     for (const reg of data.regions) {
       const rp = REGION_POS[reg.code]; if (!rp) continue;
       const hasPartner = data.partners.some(p => p.region_code === reg.code); if (!central && !hasPartner) continue;
-      const plat = r.add({ pos: rp, scale: [74, 0.6, 70], color: REGION_TINT[reg.code], pick: { kind: "region", id: reg.code, data: reg } });
+      const rows = Math.max(1, Math.ceil(data.partners.filter(p => p.region_code === reg.code).length / 3));
+      const maxZ = 6 + 22 * (rows - 1) + 14, minZ = -32;
+      const plat = r.add({ pos: [rp[0], 0, rp[2] + (minZ + maxZ) / 2], scale: [74, 0.6, maxZ - minZ], color: REGION_TINT[reg.code], pick: { kind: "region", id: reg.code, data: reg } });
       this.objs.set("region:" + reg.code, plat);
       this._label("region:" + reg.code, `${esc(reg.name)} <small>${reg.sales_enabled ? "vendas liberadas" : "vendas bloqueadas"}</small>`, add3(rp, [-26, 3, -33]), { kind: "region", id: reg.code }, false);
       r.lines.push({ a: add3(HQ, [0, 40, 0]), b: add3(rp, [-20, 7, -18]), color: [0.37, 0.92, 0.83, 0.35] });
@@ -61,6 +63,16 @@ export class World {
       this.objs.set("warehouse:" + w.id, m);
       this._label("warehouse:" + w.id, `${esc(w.name)} <small>${w.stock.on_hand - w.stock.reserved} disp. · ${w.stock.reserved} reserv.</small>`, add3(pos, [0, 10, 0]), { kind: "warehouse", id: w.id }, true);
     }
+    // bases/filiais de serviço (suas unidades): prédios técnicos com antena, ligados às unidades que atendem
+    (data.service_bases || []).forEach((sb, i) => {
+      const pos = add3(REGION_POS.BR, [0 + (i % 3) * 14, 0.6, -24 - Math.floor(i / 3) * 12]);
+      sb._pos = pos;
+      r.add({ pos, scale: [9, 12, 7], color: [0.10, 0.22, 0.30], win: 1, edge: 1, winColor: [0.35, 1.0, 0.75], pick: { kind: "base", id: sb.id, data: sb } });
+      r.add({ pos: add3(pos, [0, 12, 0]), scale: [0.6, 7, 0.6], color: [0.35, 1.0, 0.75], emissive: 1.0 });
+      this.objs.set("base:" + sb.id, { pos, home: pos });
+      this._label("base:" + sb.id, `<span class="sw" style="background:#5ff5c0"></span>Base · ${esc(sb.name)} <small>${esc(sb.city || "")} · ${sb.tecnicos} técnico(s)${sb.pendentes ? ` · ${sb.pendentes} aguardando` : ""}</small>`,
+        add3(pos, [0, 21, 0]), { kind: "base", id: sb.id, data: sb }, false);
+    });
     // parceiros
     const byRegion = {};
     for (const p of data.partners) (byRegion[p.region_code] = byRegion[p.region_code] || []).push(p);
@@ -82,6 +94,11 @@ export class World {
           add3(pos, [0, h + 4, 0]), { kind: "partner", id: p.id }, false, () => this._passes(p));
         r.lines.push({ a: add3(rp, [-20, 7, -18]), b: add3(pos, [0, 2, 0]), color: [0.65, 0.55, 0.98, visible ? 0.35 : 0.05] });
       });
+    }
+    for (const sb of data.service_bases || []) {  // rede de atendimento: base → prédio do cliente
+      for (const pid of new Set(sb.units.map(u => u.partner_id))) {
+        const b = this.objs.get("partner:" + pid); if (b) r.lines.push({ a: add3(sb._pos, [0, 12, 0]), b: add3(b.home, [0, 3, 0]), color: [0.35, 1.0, 0.75, 0.45] });
+      }
     }
     this._buildAgents(data.agents);
     if (this.inside) this.enterBuilding(this.inside, true);

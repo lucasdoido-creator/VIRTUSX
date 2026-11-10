@@ -66,8 +66,8 @@ CREATE TABLE IF NOT EXISTS regions (
 
 CREATE TABLE IF NOT EXISTS partners (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, legal_name TEXT, region_code TEXT NOT NULL REFERENCES regions(code),
-  commercial_model TEXT NOT NULL CHECK (commercial_model IN ('central_commission','b2b_resale')),
-  commission_rate_bp INTEGER, status TEXT NOT NULL DEFAULT 'ativo', contact_name TEXT,
+  commercial_model TEXT NOT NULL CHECK (commercial_model IN ('central_commission','b2b_resale','cliente_servico')),
+  commission_rate_bp INTEGER, status TEXT NOT NULL DEFAULT 'ativo', contact_name TEXT, segment TEXT, contract_minor INTEGER, notes TEXT,
   created_at TEXT NOT NULL, is_demo INTEGER NOT NULL DEFAULT 0
 );
 
@@ -75,13 +75,13 @@ CREATE TABLE IF NOT EXISTS partner_units (
   id TEXT PRIMARY KEY, partner_id TEXT NOT NULL REFERENCES partners(id), name TEXT NOT NULL,
   country TEXT NOT NULL, state TEXT, city TEXT, address TEXT,
   location_status TEXT NOT NULL CHECK (location_status IN ('confirmada','nao_confirmada')),
-  location_source TEXT, lat REAL, lng REAL, is_demo INTEGER NOT NULL DEFAULT 0
+  location_source TEXT, lat REAL, lng REAL, is_demo INTEGER NOT NULL DEFAULT 0, base_id TEXT, active INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, password_hash TEXT NOT NULL,
   role TEXT NOT NULL, partner_id TEXT REFERENCES partners(id), active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL, base_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   kind TEXT NOT NULL DEFAULT 'tarefa' CHECK (kind IN ('tarefa','pendencia')), pendency_type TEXT,
   source TEXT, related_entity TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   completed_by TEXT, completed_at TEXT, recurrence_rule TEXT, recurrence_next_at TEXT, recurrence_parent_id TEXT,
-  is_demo INTEGER NOT NULL DEFAULT 0
+  is_demo INTEGER NOT NULL DEFAULT 0, checklist_json TEXT, template TEXT
 );
 CREATE TABLE IF NOT EXISTS task_dependencies (task_id TEXT NOT NULL, depends_on_id TEXT NOT NULL, PRIMARY KEY(task_id, depends_on_id));
 CREATE TABLE IF NOT EXISTS task_comments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -278,7 +278,7 @@ CREATE TRIGGER IF NOT EXISTS audit_no_update BEFORE UPDATE ON audit_log BEGIN SE
 CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit_log BEGIN SELECT RAISE(ABORT, 'audit_log é somente inclusão'); END;
 
 CREATE TABLE IF NOT EXISTS closings (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('vendas','comissoes','conciliacao_pagamentos')),
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('vendas','comissoes','conciliacao_pagamentos','servicos')),
   partner_id TEXT NOT NULL REFERENCES partners(id), unit_id TEXT, period_type TEXT NOT NULL CHECK (period_type IN ('diario','semanal','mensal')),
   period_start TEXT NOT NULL, period_end TEXT NOT NULL, timezone TEXT NOT NULL, local_label TEXT NOT NULL,
   revision INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL, settlement_status TEXT NOT NULL,
@@ -318,6 +318,11 @@ CREATE TABLE IF NOT EXISTS brain_usage (
   purpose TEXT, partner_id TEXT, tokens_in INTEGER NOT NULL, tokens_out INTEGER NOT NULL, cost_usd REAL NOT NULL, ok INTEGER NOT NULL,
   error TEXT
 );
+CREATE TABLE IF NOT EXISTS service_bases (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, state TEXT, city TEXT, address TEXT,
+  location_status TEXT NOT NULL DEFAULT 'nao_confirmada', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
+  is_demo INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS research_cache (key TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, payload TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS idempotency_keys (key TEXT PRIMARY KEY, scope TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -343,6 +348,7 @@ class DB:
     def init(self):
         c = self.connect()
         c.executescript(SCHEMA)
+        migrate(c)
 
     @contextmanager
     def tx(self):
@@ -396,3 +402,48 @@ class DB:
         if c:
             c.close()
             self._local.conn = None
+
+
+# ------------------------------------------------------------------ migrações (bancos já existentes no seu computador)
+ADDED_COLUMNS = {
+    "partners": ["segment TEXT", "contract_minor INTEGER", "notes TEXT"],
+    "partner_units": ["base_id TEXT", "active INTEGER NOT NULL DEFAULT 1"],
+    "tasks": ["checklist_json TEXT", "template TEXT"],
+    "users": ["base_id TEXT"],
+}
+CHECK_TOKENS = {"partners": "cliente_servico", "closings": "'servicos'"}
+
+
+def _create_sql(table):
+    import re
+    m = re.search(r"CREATE TABLE IF NOT EXISTS %s \((.*?)\n\);" % table, SCHEMA, re.S)
+    return m.group(0).replace("CREATE TABLE IF NOT EXISTS %s (" % table, "CREATE TABLE %s__novo (" % table)
+
+
+def migrate(c):
+    """Idempotente: adiciona colunas novas e reconstrói tabelas cujas regras CHECK mudaram, preservando os dados."""
+    for table, cols in ADDED_COLUMNS.items():
+        have = {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
+        for col in cols:
+            if col.split()[0] not in have:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+    for table, token in CHECK_TOKENS.items():
+        cur = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+        if token in cur:
+            continue
+        cols = [r[1] for r in c.execute(f"PRAGMA table_info({table})")]
+        c.execute("PRAGMA foreign_keys=OFF")
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            c.execute(_create_sql(table))
+            new_cols = {r[1] for r in c.execute(f"PRAGMA table_info({table}__novo)")}
+            keep = ",".join(x for x in cols if x in new_cols)
+            c.execute(f"INSERT INTO {table}__novo({keep}) SELECT {keep} FROM {table}")
+            c.execute(f"DROP TABLE {table}")
+            c.execute(f"ALTER TABLE {table}__novo RENAME TO {table}")
+            c.execute("COMMIT")
+        except BaseException:
+            c.execute("ROLLBACK")
+            raise
+        finally:
+            c.execute("PRAGMA foreign_keys=ON")

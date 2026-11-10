@@ -12,7 +12,7 @@ from .tz import get_tz
 from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, emit, money
 from .db import dumps, iso, loads, new_id
 
-KINDS = ("vendas", "comissoes", "conciliacao_pagamentos")
+KINDS = ("vendas", "comissoes", "conciliacao_pagamentos", "servicos")
 FLOW = {"preparado": ("conferido", "closings.review"), "conferido": ("aprovado", "closings.approve"),
         "aprovado": ("encerrado", "closings.close")}
 
@@ -69,6 +69,36 @@ def compute(kind, partner_id, unit_id, start, end):
         if t["aguardando_pagamento"]:
             div.append({"tipo": "pedidos_em_aberto", "detalhe": f"{t['aguardando_pagamento']} pedido(s) ainda aguardando pagamento no período"})
         return t, div
+    if kind == "servicos":
+        tsql = " AND t.unit_id=?" if unit_id else ""
+        rows = R.db.all(f"SELECT t.* FROM tasks t WHERE t.partner_id=? AND (t.recurrence_rule IS NULL OR t.recurrence_parent_id IS NOT NULL) "
+                        f"AND ((t.completed_at>=? AND t.completed_at<?) OR (t.status NOT IN ('concluida','cancelada') AND t.due_at<?)){tsql}",
+                        partner_id, start, end, end, *ua)
+        done = [t for t in rows if t["status"] == "concluida" and t["completed_at"] and start <= t["completed_at"] < end]
+        late = [t for t in rows if t["status"] not in ("concluida", "cancelada")]
+        ev = {t["id"]: R.db.val("SELECT COUNT(*) FROM attachments WHERE entity_type='task' AND entity_id=? AND is_evidence=1", t["id"]) for t in done}
+        by_tpl = {}
+        for t in done:
+            by_tpl[t["template"] or "outros"] = by_tpl.get(t["template"] or "outros", 0) + 1
+        units = {}
+        for t in done:
+            units[t["unit_id"] or "sem_unidade"] = units.get(t["unit_id"] or "sem_unidade", 0) + 1
+        contract = R.db.val("SELECT contract_minor FROM partners WHERE id=?", partner_id) or 0
+        t = {"servicos_concluidos": len(done), "preventivas": by_tpl.get("preventiva_ti", 0), "chamados": by_tpl.get("chamado_ti", 0),
+             "outros_servicos": len(done) - by_tpl.get("preventiva_ti", 0) - by_tpl.get("chamado_ti", 0),
+             "atrasados_em_aberto": len(late), "com_evidencia": sum(1 for v in ev.values() if v),
+             "unidades_atendidas": len([u for u in units if u != "sem_unidade"]),
+             "valor_contrato_minor": contract if period_type_of(start, end) == "mensal" else 0}
+        t["a_receber_minor"] = t["valor_contrato_minor"]
+        t["pago_minor"] = 0
+        for x in done:
+            if not ev[x["id"]]:
+                div.append({"tipo": "sem_evidencia", "detalhe": f"Serviço concluído sem evidência anexada: {x['title'][:80]}"})
+        for x in late:
+            div.append({"tipo": "atrasado", "detalhe": f"Serviço atrasado em aberto: {x['title'][:80]}"})
+        if not contract:
+            div.append({"tipo": "sem_contrato", "detalhe": "Cliente sem valor de contrato mensal cadastrado."})
+        return t, div
     if kind == "comissoes":
         rows = R.db.all(f"SELECT c.* FROM commission_entries c JOIN orders o ON o.id=c.order_id WHERE c.partner_id=? "
                         f"AND c.created_at>=? AND c.created_at<?{unit_sql}", partner_id, start, end, *ua)
@@ -112,6 +142,11 @@ def compute(kind, partner_id, unit_id, start, end):
     return t, div
 
 
+def period_type_of(start, end):
+    from .db import parse_iso
+    return "mensal" if (parse_iso(end) - parse_iso(start)).days >= 28 else "outro"
+
+
 def prepare(actor: Principal, kind, partner_id, period_type, local_day, unit_id=None):
     actor.require("closings.prepare", partner_id)
     if kind not in KINDS:
@@ -130,7 +165,7 @@ def prepare(actor: Principal, kind, partner_id, period_type, local_day, unit_id=
         c.execute("INSERT INTO closings(id,kind,partner_id,unit_id,period_type,period_start,period_end,timezone,local_label,revision,status,"
                   "settlement_status,totals_json,divergences_json,currency,prepared_by,prepared_at,is_demo) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)",
                   (cid, kind, partner_id, unit_id, period_type, start, end, p["timezone"], label, "preparado",
-                   "pendente" if kind == "comissoes" else "nao_aplicavel", dumps(totals), dumps(div), p["currency"],
+                   "pendente" if kind in ("comissoes", "servicos") else "nao_aplicavel", dumps(totals), dumps(div), p["currency"],
                    actor.label, iso(), 1 if R.settings.is_demo else 0))
         audit(c, actor, "fechamento.preparado", "closing", cid, None, totals, partner_id)
         emit(c, "fechamento.preparado", "fechamentos", "closing", cid, partner_id, p["region_code"], status="preparado",
@@ -203,8 +238,8 @@ def settle(actor: Principal, closing_id, reference):
         if not cl:
             raise NotFound("Fechamento não encontrado")
         cl = dict(cl)
-        if cl["kind"] != "comissoes":
-            raise Conflict("Liquidação aplica-se a fechamentos de comissões")
+        if cl["kind"] not in ("comissoes", "servicos"):
+            raise Conflict("Liquidação aplica-se a fechamentos de comissões ou de serviços (recebimento da mensalidade)")
         if cl["status"] not in ("aprovado", "encerrado") or cl["superseded_by_id"]:
             raise Conflict("Liquidação exige fechamento aprovado e vigente")
         if cl["settlement_status"] == "liquidado":
@@ -218,8 +253,9 @@ def settle(actor: Principal, closing_id, reference):
                   " VALUES (?,?,?,?,?,?,?,?,?)", (pid, closing_id, cl["partner_id"], totals["a_receber_minor"], cl["currency"],
                                                  reference or "DEMO-SEM-TRANSFERENCIA", 1 if simulated else 0, iso(), actor.label))
         c.execute("UPDATE closings SET settlement_status='liquidado' WHERE id=?", (closing_id,))
-        c.execute("UPDATE commission_entries SET status='paga' WHERE partner_id=? AND kind='apuracao' AND status='liberada' "
-                  "AND created_at>=? AND created_at<?", (cl["partner_id"], cl["period_start"], cl["period_end"]))
+        if cl["kind"] == "comissoes":
+            c.execute("UPDATE commission_entries SET status='paga' WHERE partner_id=? AND kind='apuracao' AND status='liberada' "
+                      "AND created_at>=? AND created_at<?", (cl["partner_id"], cl["period_start"], cl["period_end"]))
         audit(c, actor, "fechamento.liquidado", "closing", closing_id, None, {"payout": pid, "simulado": simulated}, cl["partner_id"])
         emit(c, "fechamento.liquidado", "fechamentos", "closing", closing_id, cl["partner_id"], status="liquidado",
              payload={"simulado": simulated})

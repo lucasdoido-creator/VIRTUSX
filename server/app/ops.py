@@ -84,7 +84,13 @@ def world(actor: Principal):
             {"code": "atendimento", "name": "Atendimento", "metric": f"{R.db.val(Q_TICKETS)} chamados (módulo planejado)"},
             {"code": "financeiro", "name": "Financeiro", "metric": f"{R.db.val(Q_APPR)} aprovações pendentes"},
         ]
+    bases = R.db.all("SELECT * FROM service_bases WHERE active=1 ORDER BY name") if actor.is_central else []
+    for b in bases:
+        b["units"] = R.db.all("SELECT id, partner_id FROM partner_units WHERE base_id=? AND active=1", b["id"])
+        b["tecnicos"] = R.db.val("SELECT COUNT(*) FROM users WHERE base_id=? AND role='tecnico' AND active=1", b["id"])
+        b["pendentes"] = R.db.val("SELECT COUNT(*) FROM users WHERE base_id=? AND role='tecnico' AND active=0", b["id"])
     return {
+        "service_bases": bases,
         "environment": R.settings.env, "generated_at": iso(), "view": "central" if actor.is_central else "parceiro",
         "regions": regions, "partners": partners, "warehouses": whs if actor.is_central else
         [w for w in whs if any(p["region_code"] == w["region_code"] for p in partners)],
@@ -100,14 +106,18 @@ def partner_building(actor: Principal, partner_id):
     p = R.db.one("SELECT p.*, r.name region_name, r.currency, r.timezone, r.seller_entity FROM partners p JOIN regions r ON r.code=p.region_code WHERE p.id=?", partner_id)
     if not p:
         raise NotFound("Parceiro não encontrado")
-    units = R.db.all("SELECT * FROM partner_units WHERE partner_id=?", partner_id)
+    units = R.db.all("SELECT u.*, b.name base_name FROM partner_units u LEFT JOIN service_bases b ON b.id=u.base_id WHERE u.partner_id=?", partner_id)
     team = R.db.all("SELECT id,name,role,email FROM users WHERE partner_id=? AND active=1", partner_id)
     central_people = R.db.all("SELECT id,name,role FROM users WHERE partner_id IS NULL AND active=1") if actor.is_central else []
     t_all = tasks.list_tasks(actor, partner_id=partner_id)
     orders = commerce.list_orders(actor, partner_id=partner_id, limit=50)
     model = p["commercial_model"]
     fin = {"model": model}
-    if model == "central_commission":
+    if model == "cliente_servico":
+        fin["contract_minor"] = p["contract_minor"]
+        fin["note"] = ("Cliente de serviços de TI: o fechamento mensal de serviços lista o que foi feito por unidade, com evidências, "
+                       "e o valor do contrato a receber. Aprovar não significa que o cliente pagou: registre o recebimento à parte.")
+    elif model == "central_commission":
         rows = R.db.all("SELECT kind,status,SUM(amount_minor) total FROM commission_entries WHERE partner_id=? GROUP BY kind,status", partner_id)
         fin["commissions"] = rows
         fin["a_receber_minor"] = sum(r["total"] for r in rows if r["status"] in ("em_carencia", "liberada") or r["kind"] in ("estorno", "ajuste") and r["status"] != "paga")

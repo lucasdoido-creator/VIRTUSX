@@ -2,7 +2,7 @@
 
 Documentação completa: **[docs/PLATAFORMA.md](docs/PLATAFORMA.md)**.
 
-**Windows:** dois cliques em `iniciar.bat` → abra http://127.0.0.1:8000 (login demo `admin@central.demo` / `demo1234`). Testes: `verificar.bat`.
+**Windows:** `iniciar.bat` (demonstração, http://127.0.0.1:8000, login `admin@central.demo` / `demo1234`) · `iniciar-producao.bat` (operação real, http://127.0.0.1:8001, primeiro acesso cria o administrador). Testes: `verificar.bat`.
 
 **Linux/macOS:**
 ```bash

@@ -1,7 +1,7 @@
 # VIRTUSX — documentação única
 
 > Fonte única de verdade do projeto. Atualize este arquivo a cada etapa: decisões, arquitetura, modelo de dados, etapas, integrações, testes, limitações e custos.
-> Última atualização: 10/11/2026 · Etapa 1 concluída · Etapa 2 em versão inicial · **CEO de IA por parceiro** · Windows · CI no GitHub.
+> Última atualização: 10/11/2026 · Etapa 1 concluída · Etapa 2 em versão inicial · CEO de IA · **operação real de serviços de TI (produção)** · Windows · CI.
 
 ---
 
@@ -153,9 +153,26 @@ Limites: o CEO só cria tarefas internas. Gastos, compras, campanhas, reembolsos
 
 **Claude (reserva paga):** copie `config.local.env.exemplo` para `config.local.env` e preencha `ANTHROPIC_API_KEY` (o arquivo fica só no seu PC, fora do Git). Travas: teto diário e mensal; ao atingir, segue só com IA grátis e regras; aviso automático (evento + pendência) ao chegar a 80% do mês. O consumo fica em `brain_usage` e aparece no prédio central (*Cérebro de IA*).
 
+## 7.2 Operação real: serviços de TI (ambiente de produção)
+
+Ambiente separado (`iniciar-producao.bat`, porta **8001**, faixa vermelha **PRODUÇÃO**, banco `data/plataforma_production.sqlite3`). Nasce limpo: só regiões, políticas e agentes; **nenhum dado fictício**. Demonstração (porta 8000) e produção podem ficar abertas juntas (cookies de sessão separados).
+
+| Item | Como funciona |
+|---|---|
+| Primeiro acesso | Tela cria o administrador (uma única vez; senha ≥ 10). Depois, acessos só por *Cadastros*. |
+| Bases / filiais | Suas unidades de prestação de serviço; aparecem no 3D como prédios técnicos (antena verde) ligados às unidades que atendem. |
+| Clientes | `commercial_model='cliente_servico'`: segmento, contato, **contrato mensal**. Cada cliente ganha prédio, CEO de IA e módulos internos. |
+| Unidades dos clientes | Cidade/UF, endereço (confirmado ou não) e **base que atende**. |
+| Equipe e acessos | Administrador, operações, financeiro, acesso do cliente (gestor/operador) e **técnico/freelancer** (vinculado a uma base). Freelancer entra **aguardando autorização**; só vê e altera as próprias tarefas (status, checklist, comentários, evidências). |
+| Checklists de TI | Modelos: preventiva, chamado, backup, inventário, implantação. Conclusão exige todos os itens; quem marcou e quando fica registrado. Preventiva pode ser recorrente (mensal) por unidade. |
+| Fechamento mensal de serviços | Serviços concluídos por tipo/unidade, atrasados, evidências e valor do contrato; divergências (sem evidência, atrasos, sem contrato). Recebimento é registrado à parte com referência (NF/boleto). |
+| CEO de serviços | Usa só Pesquisa, Análise, Conteúdo e Financeiro; foco em melhorar o serviço e ampliar o contrato. |
+
+Próximo passo do modelo de negócio: **parceiros com mensalidade** (cobrança recorrente) — depende da escolha do meio de cobrança.
+
 ## 8. Como executar e acessar
 
-**Windows:** dois cliques em `iniciar.bat` (instala o que faltar e sobe o servidor). `verificar.bat` roda os testes.
+**Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
 
 **Linux/macOS:**
 ```bash
@@ -172,7 +189,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **50 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`), sem rede e sem gasto,, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **58 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`), sem rede e sem gasto,, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.
@@ -191,7 +208,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 - CEO: plano-modelo sem IA; plano por IA local validado (agente inexistente e instrução injetada descartados); Claude respeita o teto mensal; dependências respeitadas pelos agentes; Conteúdo sem IA fica *aguardando integração*; briefing uma vez por dia; isolamento entre parceiros; previsão determinística; cache de notícias.
 - Fusos embutidos idênticos à base oficial a cada 3 h de 2025 a 2027, incluindo viradas de horário de verão.
 
-Teste de navegador (`scripts/e2e.mjs`, Playwright/Chromium com WebGL por software): login, cidade 3D, prédio do parceiro brasileiro, criação de página pela interface, compra na loja com pagamento de teste, envio + comissão refletidos ao vivo, **queda e reinício do servidor** com pedido criado durante a desconexão e recebido após a reconexão, tabelas, visão móvel em modo leve, isolamento. Resultado: **E2E OK**.
+Testes de navegador: `scripts/e2e_producao.mjs` (produção limpa: primeiro acesso, cadastros pela tela, freelancer autorizado, chamado com checklist concluído pelo celular com evidência, bases no 3D) e (`scripts/e2e.mjs`, Playwright/Chromium com WebGL por software): login, cidade 3D, prédio do parceiro brasileiro, criação de página pela interface, compra na loja com pagamento de teste, envio + comissão refletidos ao vivo, **queda e reinício do servidor** com pedido criado durante a desconexão e recebido após a reconexão, tabelas, visão móvel em modo leve, isolamento. Resultado: **E2E OK**.
 
 ## 9.1 Automação contínua (GitHub)
 

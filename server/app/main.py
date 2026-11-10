@@ -22,7 +22,7 @@ from .config import ROOT, load_settings
 from .core import R, AppError, Conflict, Forbidden, NotFound, Principal, audit, hash_token, new_token, verify_password
 from .db import DB, iso, loads, now
 from datetime import timedelta
-from . import agents, brain, ceo, closings, commerce, ops, policies, seed, tasks
+from . import agents, brain, ceo, closings, commerce, ops, policies, registry, seed, tasks
 
 WEB = ROOT / "web"
 # No Windows o registro pode mapear .js para text/plain, o que bloqueia módulos JS no navegador.
@@ -33,8 +33,13 @@ SCHED = {"last_tick": None, "last_error": None, "ticks": 0}
 
 
 # ------------------------------------------------------------------ utilidades
+def cookie_name():
+    # um cookie por ambiente: demo (porta 8000) e produção (8001) podem ficar abertos ao mesmo tempo sem se derrubar
+    return f"sessao_{R.settings.env}"
+
+
 def principal(req: Request) -> Principal:
-    tok = req.cookies.get("sessao")
+    tok = req.cookies.get(cookie_name())
     if not tok:
         raise AppError("Autenticação necessária", "nao_autenticado", 401)
     s = R.db.one("SELECT s.*, u.email, u.name, u.role, u.partner_id, u.active FROM sessions s JOIN users u ON u.id=s.user_id WHERE token_hash=?",
@@ -84,18 +89,30 @@ async def login(req):
                   (hash_token(tok), u["id"], iso(), iso(now() + timedelta(hours=R.settings.session_hours))))
         audit(c, Principal("user", u["id"], u["role"], u["partner_id"]), "sessao.login", "user", u["id"])
     r = ok({"id": u["id"], "name": u["name"], "role": u["role"], "partner_id": u["partner_id"]})
-    r.set_cookie("sessao", tok, httponly=True, samesite="strict", secure=not R.settings.is_demo, max_age=R.settings.session_hours * 3600)
+    r.set_cookie(cookie_name(), tok, httponly=True, samesite="strict", secure=req.url.scheme == "https", max_age=R.settings.session_hours * 3600)
     return r
 
 
 @endpoint
+async def setup_get(req):
+    return ok({"needed": seed.needs_setup(), "environment": R.settings.env})
+
+
+@endpoint
+async def setup_post(req):
+    b = await body(req)
+    uid = await T(seed.create_first_admin, b.get("name"), b.get("email"), b.get("password"))
+    return ok({"id": uid})
+
+
+@endpoint
 async def logout(req):
-    tok = req.cookies.get("sessao")
+    tok = req.cookies.get(cookie_name())
     if tok:
         with R.db.tx() as c:
             c.execute("DELETE FROM sessions WHERE token_hash=?", (hash_token(tok),))
     r = ok()
-    r.delete_cookie("sessao")
+    r.delete_cookie(cookie_name())
     return r
 
 
@@ -317,6 +334,15 @@ def _demo_replay(req, p, b):
     return commerce.receive_webhook("demo", raw, headers)
 
 
+def _reg(req, p, b): return registry.overview(p)
+def _reg_base(req, p, b): return {"id": registry.save_base(p, b, req.path_params.get("id"))}
+def _reg_client(req, p, b): return {"id": registry.save_client(p, b, req.path_params.get("id"))}
+def _reg_unit(req, p, b): return {"id": registry.save_unit(p, b, req.path_params.get("id"))}
+def _reg_user(req, p, b): return {"id": registry.save_user(p, b, req.path_params.get("id"))}
+def _templates(req, p, b): return {k: v for k, v in tasks.TEMPLATES.items()}
+def _checklist(req, p, b): return {"checklist": tasks.set_checklist_item(p, req.path_params["id"], b.get("index"), b.get("done"))}
+
+
 def _ceo(req, p, b): return ceo.list_ventures(p, req.path_params["id"])
 def _idea(req, p, b): return {"id": ceo.submit_idea(p, req.path_params["id"], b.get("idea"), b.get("keywords"))}
 
@@ -428,6 +454,8 @@ def create_app(**overrides):
         agents.ensure_agents(c)
     if settings.is_demo:
         seed.seed_demo()
+    else:
+        seed.seed_reference()
     with R.db.tx() as c:
         agents.ensure_agents(c)  # agentes novos entram em bancos já existentes
         ceo.ensure_ceos(c)       # um CEO de IA por parceiro
@@ -446,6 +474,7 @@ def create_app(**overrides):
     P = private
     routes = [
         Route("/", index), Route("/loja/{slug}", store_page), Route("/api/health", health),
+        Route("/api/setup", setup_get), Route("/api/setup", setup_post, methods=["POST"]),
         Route("/api/auth/login", login, methods=["POST"]), Route("/api/auth/logout", logout, methods=["POST"]), Route("/api/me", me),
         Route("/api/public/stores/{slug}", store_get), Route("/api/public/stores/{slug}/checkout", store_checkout, methods=["POST"]),
         Route("/api/public/orders/{code}", order_public), Route("/api/public/orders/{code}/pay", order_pay, methods=["POST"]),
@@ -464,6 +493,12 @@ def create_app(**overrides):
         Route("/api/closings/{id}/reopen", P(_closing_reopen), methods=["POST"]),
         Route("/api/closings/{id}/settle", P(_closing_settle), methods=["POST"]),
         Route("/api/commissions/adjustments", P(_adjust), methods=["POST"]),
+        Route("/api/cadastros", P(_reg)),
+        Route("/api/cadastros/bases", P(_reg_base), methods=["POST"]), Route("/api/cadastros/bases/{id}", P(_reg_base), methods=["PUT"]),
+        Route("/api/cadastros/clientes", P(_reg_client), methods=["POST"]), Route("/api/cadastros/clientes/{id}", P(_reg_client), methods=["PUT"]),
+        Route("/api/cadastros/unidades", P(_reg_unit), methods=["POST"]), Route("/api/cadastros/unidades/{id}", P(_reg_unit), methods=["PUT"]),
+        Route("/api/cadastros/usuarios", P(_reg_user), methods=["POST"]), Route("/api/cadastros/usuarios/{id}", P(_reg_user), methods=["PUT"]),
+        Route("/api/task-templates", P(_templates)), Route("/api/tasks/{id}/checklist", P(_checklist), methods=["POST"]),
         Route("/api/partners/{id}/ceo", P(_ceo)), Route("/api/partners/{id}/ideas", P(_idea), methods=["POST"]),
         Route("/api/partners/{id}/ceo/run", P(_ceo_run), methods=["POST"]), Route("/api/brain", P(_brain)),
         Route("/api/agents", P(_agents)), Route("/api/agents/pause", P(_pause), methods=["POST"]),
