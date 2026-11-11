@@ -49,8 +49,39 @@ const f = (await api(`/api/mercados/${m.id}`)).data.funil;
 if (f.ganhos !== 1 || f.visitas < 1) throw new Error("funil incorreto: " + JSON.stringify(f));
 await A.screenshot({ path: `${OUT}/x4_funil.png` });
 log(`funil: ${f.visitas} visita(s) → ${f.leads} lead(s) → ${f.ganhos} ganho(s)`);
+// 3b. vitrine com foto + layout, pela tela
+const fs = await import("node:fs"); const png = "/tmp/e2e_item.png";
+fs.writeFileSync(png, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+await A.waitForSelector("#mkItem", { timeout: 15000 });
+await A.fill("#mkItem [name=title]", "Pacote Manutenção"); await A.fill("#mkItem [name=price]", "a partir de 39 €");
+await A.setInputFiles("#mkItem [name=photo]", png); await A.click("#mkItem button.primary");
+await A.waitForSelector("#mkSite td:has-text('Pacote Manutenção') >> xpath=.. >> img", { timeout: 15000 });
+await A.selectOption("#mkLay", "vitrine"); await A.waitForTimeout(1200);
+const vh = await (await fetch(`${BASE}/m/${m.slug}`)).text();
+if (!vh.includes('class="lay-vitrine"') || !vh.includes("Pacote Manutenção") || !/\/img\/[0-9a-f]{24}\.png/.test(vh)) throw new Error("vitrine não publicada no site");
+const im = vh.match(/\/m\/[^"]+\/img\/[0-9a-f]{24}\.png/)[0]; if ((await fetch(BASE + im)).status !== 200) throw new Error("foto da vitrine não serve");
+await A.screenshot({ path: `${OUT}/x5_vitrine.png` });
+log("vitrine: item com foto e layout 'vitrine' publicados no site");
+// 3c. financeiro manual e estoque da operação, pela tela
+await A.click("#closePanel").catch(() => {});
+await A.click("#viewSeg button[data-view=tabelas]"); await A.click("#tTabs button:has-text('Financeiro')");
+await A.waitForSelector("#fnForm", { timeout: 15000 });
+await A.selectOption("#fnForm [name=kind]", "receita"); await A.selectOption("#fnForm [name=category]", "mensalidade de parceiro");
+await A.fill("#fnForm [name=description]", "Mensalidade parceiro Lisboa"); await A.fill("#fnForm [name=amount]", "1.250,90"); await A.click("#fnForm button.primary");
+await A.waitForSelector("#tBody td:has-text('Mensalidade parceiro Lisboa')", { timeout: 15000 });
+const fin = (await api("/api/financeiro-manual")).data; if (!fin.lancamentos.some(e => e.amount_minor === 125090)) throw new Error("lançamento não gravado");
+await A.screenshot({ path: `${OUT}/x6_financeiro.png` });
+await A.click("#tTabs button:has-text('Estoque das operações')"); await A.waitForSelector("#skForm", { timeout: 15000 });
+await A.fill("#skForm [name=name]", "Cabo de rede"); await A.fill("#skForm [name=min_qty]", "5"); await A.click("#skForm button.primary");
+await A.waitForSelector("#tBody td:has-text('Cabo de rede')", { timeout: 15000 });
+const mv = "#tBody tr:has-text('Cabo de rede') form[data-mv]";
+await A.fill(`${mv} [name=qty]`, "10"); await A.fill(`${mv} [name=reason]`, "compra inicial"); await A.click(`${mv} button`);
+await A.waitForSelector("#tBody td:has-text('compra inicial')", { timeout: 15000 });
+await A.screenshot({ path: `${OUT}/x7_estoque.png` });
+log("financeiro manual (R$ 1.250,90) e estoque (entrada 10) lançados pela tela");
+await A.click("#viewSeg button[data-view=\"3d\"]");
 // 4. torre no mapa e Sentinela
-await A.click("#closePanel"); await A.fill("#q", "Portugal"); await A.click("#qres button:has-text('Mercado · Portugal')");
+await A.click("#closePanel", { timeout: 2000 }).catch(() => {}); await A.fill("#q", "Portugal"); await A.click("#qres button:has-text('Mercado · Portugal')");
 await A.waitForSelector("#pTitle:has-text('Portugal')"); await A.click("#closePanel");
 await A.click("#saudeBtn"); await A.waitForSelector("#pTitle:has-text('Saúde do sistema')", { timeout: 15000 });
 await A.waitForSelector("#sentRun", { state: "visible", timeout: 30000 }).catch(async e => {

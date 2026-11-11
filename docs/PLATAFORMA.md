@@ -268,6 +268,13 @@ Dica: para precisão total, copie as coordenadas do Google Maps (clique direito 
 - **Funil por país** (painel do país): visitas do site (contadas no servidor, sem cookies; a prévia não conta) → leads → ganhos, conversões e origens. **Tabelas → Leads**: todos os leads, com situação (novo, contatado, proposta, ganho, perdido).
 - Dica: nos anúncios use links como `https://seu-dominio/m/<pais>?utm_source=google&utm_campaign=lancamento`.
 
+## 7.10 Financeiro manual, estoque por operação, vitrine e parceiros
+
+- **Financeiro manual** (Tabelas → Financeiro; perfis com `fin.write`): receitas e despesas de **qualquer operação** — sede, cada base, cada cliente, cada país — com categoria (ex.: mensalidade de parceiro, serviços, salários/freelancers, materiais, impostos, marketing), valor em centavos, moeda, data e situação **previsto** (a pagar/receber) ou **realizado**. Totais por operação/mês (receitas, despesas, resultado e previstos). Nada é apagado: erro = cancelar com motivo (fica na auditoria). Não movimenta dinheiro real.
+- **Estoque das operações** (Tabelas → Estoque das operações; `estoque.write`): itens por operação (SKU, unidade, mínimo, custo), movimentos entrada/saída/ajuste com motivo obrigatório, saldo **nunca negativo**; abaixo do mínimo abre pendência "estoque baixo", que fecha sozinha quando o saldo volta.
+- **Vitrine/catálogo do site** (painel do país → Vitrine e catálogo): itens com foto (JPG/PNG/WEBP até 2 MB, conferidos pelo conteúdo do arquivo, servidos só se o item estiver no site), descrição, preço em texto e ordem; ocultar/mostrar/remover. Cada item tem "Pedir orçamento deste item", que já preenche o pedido. **Layout por país**: Clássico, Vitrine (catálogo em destaque) ou Direto ao ponto.
+- **Sobre nós e "Seja nosso parceiro"** (Cadastros → Identidade visual): texto institucional e até 3 planos de mensalidade (nome, valor, benefícios) exibidos nos sites com formulário próprio. O interessado vira lead **parceiro** com o plano escolhido e uma tarefa para a equipe. A **cobrança automática** da mensalidade depende de escolher o meio de pagamento (Pix/boleto/cartão); até lá, os recebimentos são lançados no Financeiro manual.
+
 ## 8. Como executar e acessar
 
 **Windows:** `iniciar.bat` = demonstração (porta 8000); `iniciar-producao.bat` = operação real (porta 8001). Ambos instalam o que faltar e **ligam o Ollama** (baixam o modelo na primeira vez). `verificar.bat` roda os testes.
@@ -287,7 +294,7 @@ Compatibilidade Windows: fusos horários funcionam mesmo sem o pacote `tzdata` (
 
 ## 9. Testes realizados
 
-`python3 -m pytest` → **112 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`, `test_mercados_monitor`, `test_vitrine`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
+`python3 -m pytest` → **115 testes passando** (`test_fluxo`, `test_operacao`, `test_tz`, `test_ceo`, `test_producao`, `test_geo`, `test_canais_comandos`, `test_saude`, `test_localizacao_operacoes`, `test_ceo_base_pontos`, `test_agentes_chave`, `test_mercados_monitor`, `test_vitrine`, `test_operacional`), sem rede e sem gasto, também com `FORCE_TZ_FALLBACK=1` (simula Windows sem tzdata):
 
 - Percurso completo da Etapa 1 com verificação de eventos correlacionados, ocorrido/recebido, mascaramento de PII.
 - Pagamento recusado (reserva liberada); cartão fora da lista de teste recusado.

@@ -1,4 +1,5 @@
 """WhatsApp (webhook assinado, deduplicação, janela de 24 h, envio pela API oficial), canais internos e central de comandos."""
+import time
 import hashlib
 import hmac
 import json
@@ -15,7 +16,7 @@ def payload(msg_id, frm="5511912345678", text="Olá, a impressora parou", name="
     return {"object": "whatsapp_business_account", "entry": [{"id": "WABA", "changes": [{"field": "messages", "value": {
         "messaging_product": "whatsapp", "metadata": {"phone_number_id": "PNID"},
         "contacts": [{"wa_id": frm, "profile": {"name": name}}],
-        "messages": [{"from": frm, "id": msg_id, "timestamp": "1794280000", "type": "text", "text": {"body": text}}]}}]}]}
+        "messages": [{"from": frm, "id": msg_id, "timestamp": str(int(time.time())), "type": "text", "text": {"body": text}}]}}]}]}
 
 
 def signed(client, data):

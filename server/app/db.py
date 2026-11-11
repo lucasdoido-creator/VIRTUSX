@@ -353,6 +353,22 @@ CREATE TABLE IF NOT EXISTS markets (
 );
 CREATE TABLE IF NOT EXISTS market_items (id TEXT PRIMARY KEY, market_id TEXT NOT NULL REFERENCES markets(id), kind TEXT NOT NULL, title TEXT NOT NULL,
   body_json TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS fin_entries (
+  id TEXT PRIMARY KEY, scope_type TEXT NOT NULL, scope_id TEXT NOT NULL, scope_name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('receita','despesa')), category TEXT NOT NULL, description TEXT NOT NULL,
+  amount_minor INTEGER NOT NULL CHECK (amount_minor > 0), currency TEXT NOT NULL, date TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('previsto','realizado')), created_by TEXT, created_at TEXT NOT NULL, canceled_at TEXT, cancel_reason TEXT
+);
+CREATE TABLE IF NOT EXISTS stock_items (
+  id TEXT PRIMARY KEY, scope_type TEXT NOT NULL, scope_id TEXT NOT NULL, scope_name TEXT NOT NULL, sku TEXT, name TEXT NOT NULL, unit TEXT NOT NULL,
+  qty REAL NOT NULL DEFAULT 0 CHECK (qty >= 0), min_qty REAL NOT NULL DEFAULT 0, cost_minor INTEGER, currency TEXT NOT NULL DEFAULT 'BRL',
+  active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stock_moves (id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES stock_items(id),
+  kind TEXT NOT NULL CHECK (kind IN ('entrada','saida','ajuste')), qty REAL NOT NULL, qty_after REAL NOT NULL, reason TEXT NOT NULL,
+  created_by TEXT, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS site_items (id TEXT PRIMARY KEY, market_id TEXT NOT NULL REFERENCES markets(id), title TEXT NOT NULL, description TEXT,
+  price TEXT, photo TEXT, position INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS market_views (market_id TEXT NOT NULL, day TEXT NOT NULL, views INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (market_id, day));
 CREATE TABLE IF NOT EXISTS leads (
   id TEXT PRIMARY KEY, market_id TEXT NOT NULL REFERENCES markets(id), name TEXT NOT NULL, email TEXT, phone TEXT, message TEXT,
@@ -457,6 +473,7 @@ ADDED_COLUMNS = {
     "service_bases": ["lat REAL", "lng REAL", "geo_source TEXT"],
     "tasks": ["checklist_json TEXT", "template TEXT"],
     "users": ["base_id TEXT"],
+    "leads": ["kind TEXT NOT NULL DEFAULT 'cliente'", "plan TEXT"],
 }
 CHECK_TOKENS = {"partners": "cliente_servico", "closings": "'servicos'"}
 

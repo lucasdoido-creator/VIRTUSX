@@ -63,3 +63,39 @@ def test_visitas_nao_contam_previa(admin, public):
         public.get(f"/m/{d['slug']}")
     admin.get(f"/m/{d['slug']}")                                                 # equipe logada vendo: conta como prévia? não (publicado conta)
     assert vitrine.funnel(d["id"])["visitas"] >= 3
+
+
+PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+
+
+def test_catalogo_fotos_layout_sobre_e_parceiros(admin, ops, public):
+    d = _mercado_publicado(admin)
+    base = f"/api/mercados/{d['id']}/site-itens"
+    assert admin.post(base, json={"title": "Plano TI", "photo_b64": "aGVsbG8="}).status_code == 400          # não é imagem
+    assert admin.post(base, json={"title": ""}).status_code == 400
+    it = admin.post(base, json={"title": "Plano TI <b>", "description": "Suporte 24h", "price": "€ 49", "photo_b64": PNG}).json()["data"]
+    assert it["photo"].endswith(".png")
+    admin.post(base, json={"title": "Oculto", "active": False})
+    assert len(admin.get(base).json()["data"]["itens"]) == 2
+    admin.post("/api/marca", json={"sobre": "Somos uma rede de suporte de TI.", "parceiros_ativo": True,
+                                   "planos": [{"nome": "Básico", "preco": "€ 99", "beneficios": ["Marca", "Sistema"]}, {"nome": ""}]})
+    h = public.get(f"/m/{d['slug']}").text
+    assert "Plano TI &lt;b&gt;" in h and "Oculto" not in h and f"/m/{d['slug']}/img/{it['photo']}" in h
+    assert "Somos uma rede de suporte" in h and 'name="tipo" value="parceiro"' in h and "<option>Básico</option>" in h
+    img = public.get(f"/m/{d['slug']}/img/{it['photo']}")
+    assert img.status_code == 200 and img.content[:4] == b"\x89PNG"
+    assert public.get(f"/m/{d['slug']}/img/../../x.png").status_code == 404
+    assert "Plano TI" in public.get(f"/m/{d['slug']}?item={it['id']}").text.split('id="orcamento"')[1]   # pedido já preenchido
+    assert admin.put(f"/api/mercados/{d['id']}/layout", json={"layout": "xx"}).status_code == 400
+    admin.put(f"/api/mercados/{d['id']}/layout", json={"layout": "vitrine"})
+    h = public.get(f"/m/{d['slug']}").text
+    assert 'class="lay-vitrine"' in h and h.index('id="catalogo"') < h.index("id=\"orcamento\"")
+    vitrine._rate.clear()
+    r = public.post(f"/m/{d['slug']}/lead", data={"tipo": "parceiro", "plano": "Básico", "nome": "Loja Sol", "email": "sol@ex.es", "consentimento": "1"},
+                    follow_redirects=False)
+    assert "obrigado=1" in r.headers["location"]
+    l = admin.get(f"/api/leads?market_id={d['id']}").json()["data"][0]
+    assert l["kind"] == "parceiro" and l["plan"] == "Básico"
+    assert R.db.val("SELECT COUNT(*) FROM tasks WHERE title LIKE 'Parceiro interessado (Básico)%'") == 1
+    assert ops.post(base, json={"title": "x"}).status_code == 403
+    assert admin.delete(f"{base}/{it['id']}").json()["ok"]

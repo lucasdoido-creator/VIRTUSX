@@ -468,7 +468,7 @@ async def market_page(req):
         prev = None
     qp_ = req.query_params
     state = "ok" if qp_.get("obrigado") else ("erro" if qp_.get("erro") else "")
-    utm = {k: qp_.get(k) for k in ("utm_source", "utm_medium", "utm_campaign") if qp_.get(k)}
+    utm = {k: qp_.get(k) for k in ("utm_source", "utm_medium", "utm_campaign", "item") if qp_.get(k)}
     html_ = await run_in_threadpool(mercados.render_site, req.path_params["slug"], prev, state, utm)
     if html_ is None:
         return Response("Página não encontrada", status_code=404, media_type="text/plain; charset=utf-8")
@@ -491,6 +491,65 @@ async def market_lead(req):
     return RedirectResponse(f"/m/{slug}?{q}#orcamento", status_code=303)
 
 
+async def market_img(req):
+    from . import vitrine
+    from starlette.responses import FileResponse
+    f = await run_in_threadpool(vitrine.image_path, req.path_params["slug"], req.path_params["name"])
+    if not f:
+        return Response("Não encontrado", status_code=404, media_type="text/plain")
+    return FileResponse(f, headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"})
+
+
+def _site_items(req, p, b):
+    from . import vitrine
+    p.require("mercados.read")
+    return {"itens": vitrine.list_items(req.path_params["mid"]), "layouts": vitrine.LAYOUTS}
+
+
+def _site_item_add(req, p, b):
+    from . import vitrine
+    return vitrine.save_item(p, req.path_params["mid"], b)
+
+
+def _site_item_upd(req, p, b):
+    from . import vitrine
+    return vitrine.save_item(p, req.path_params["mid"], b, req.path_params["iid"])
+
+
+def _site_item_del(req, p, b):
+    from . import vitrine
+    return vitrine.delete_item(p, req.path_params["mid"], req.path_params["iid"])
+
+
+def _site_layout(req, p, b):
+    from . import vitrine
+    return vitrine.set_layout(p, req.path_params["mid"], b.get("layout"))
+
+
+def _op_scopes(req, p, b):
+    from . import operacional
+    return operacional.scopes(p)
+def _fin(req, p, b):
+    from . import operacional
+    return operacional.list_entries(p, qp(req, "month"), qp(req, "scope_type"), qp(req, "scope_id"))
+def _fin_add(req, p, b):
+    from . import operacional
+    return operacional.add_entry(p, b)
+def _fin_cancel(req, p, b):
+    from . import operacional
+    return operacional.cancel_entry(p, req.path_params["id"], b.get("reason"))
+def _fin_settle(req, p, b):
+    from . import operacional
+    return operacional.settle_entry(p, req.path_params["id"])
+def _stk(req, p, b):
+    from . import operacional
+    return operacional.list_stock(p, qp(req, "scope_type"), qp(req, "scope_id"))
+def _stk_save(req, p, b):
+    from . import operacional
+    return operacional.save_item(p, b, req.path_params.get("id"))
+def _stk_move(req, p, b):
+    from . import operacional
+    return operacional.move(p, req.path_params["id"], b.get("kind"), b.get("qty"), b.get("reason"))
 def _marca_get(req, p, b):
     from . import vitrine
     return vitrine.get_brand()
@@ -723,8 +782,16 @@ def create_app(**overrides):
         Route("/api/sistema/chave-monitor", P(_chave_monitor), methods=["POST"]), Route("/api/monitor", P(_monitor)),
         Route("/api/paises/{nome}", P(_pais)), Route("/api/mercados", P(_mercados)), Route("/api/mercados", P(_mercado_new), methods=["POST"]),
         Route("/api/mercados/{id}", P(_mercado)),
-        Route("/m/{slug}", market_page), Route("/m/{slug}/lead", market_lead, methods=["POST"]),
+        Route("/m/{slug}", market_page), Route("/m/{slug}/lead", market_lead, methods=["POST"]), Route("/m/{slug}/img/{name}", market_img),
+        Route("/api/mercados/{mid}/site-itens", P(_site_items)), Route("/api/mercados/{mid}/site-itens", P(_site_item_add), methods=["POST"]),
+        Route("/api/mercados/{mid}/site-itens/{iid}", P(_site_item_upd), methods=["PUT"]),
+        Route("/api/mercados/{mid}/site-itens/{iid}", P(_site_item_del), methods=["DELETE"]),
+        Route("/api/mercados/{mid}/layout", P(_site_layout), methods=["PUT"]),
         Route("/api/marca", P(_marca_get)), Route("/api/marca", P(_marca_set), methods=["POST"]),
+        Route("/api/operacoes", P(_op_scopes)), Route("/api/financeiro-manual", P(_fin)), Route("/api/financeiro-manual", P(_fin_add), methods=["POST"]),
+        Route("/api/financeiro-manual/{id}/cancelar", P(_fin_cancel), methods=["POST"]), Route("/api/financeiro-manual/{id}/realizar", P(_fin_settle), methods=["POST"]),
+        Route("/api/estoque-operacoes", P(_stk)), Route("/api/estoque-operacoes", P(_stk_save), methods=["POST"]),
+        Route("/api/estoque-operacoes/{id}", P(_stk_save), methods=["PUT"]), Route("/api/estoque-operacoes/{id}/movimento", P(_stk_move), methods=["POST"]),
         Route("/api/leads", P(_leads)), Route("/api/leads/{id}", P(_lead_status), methods=["PATCH"]), Route("/sitemap.xml", sitemap_xml), Route("/robots.txt", robots_txt), Route("/api/saude/erros/resolver", P(_saude_resolver), methods=["POST"]),
         Route("/api/saude/erro-tela", client_error, methods=["POST"]),
         Route("/api/geo/imagem/mundo", P(_geo_img_world)), Route("/api/geo/imagem/regiao", P(_geo_img_box)),

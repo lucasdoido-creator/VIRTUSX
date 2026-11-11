@@ -673,6 +673,7 @@ async function openMarket(id) {
       ${pub && pub.status === "aguardando_aprovacao" ? `<button class="btn small" id="mkAppr">Aprovações</button>` : ""}</div>
     ${m.site_published ? `<p class="muted">Endereço: <span class="mono">${esc(m.url)}</span>. Para o Google indexar, o servidor precisa de um endereço público (domínio ou túnel HTTPS) — configure PUBLIC_BASE_URL.</p>` : ""}
     ${funilHtml(m.funil)}
+    ${can("mercados.write") ? `<h4>Vitrine e catálogo do site</h4><div id="mkSite" data-noauto="1"><p class="muted">Carregando…</p></div>` : ""}
     <h4>Leads (contatos do site)</h4><div id="mkLeads"><p class="muted">Carregando…</p></div>
     <h4>Setores</h4><table class="t"><tbody>${m.tarefas.map(t => `<tr class="click" data-task="${t.id}"><td>${esc(SETOR_LBL[t.related_entity.split(":")[2]] || t.related_entity.split(":")[2])}</td>
       <td>${esc(t.title)}</td><td>${badge(TASK_STATES[t.status] || t.status, t.status === "concluida" ? "ok" : "")}</td></tr>`).join("") || `<tr><td class="muted">O CEO ainda está planejando…</td></tr>`}</tbody></table>
@@ -687,8 +688,99 @@ async function openMarket(id) {
       <dt>Imposto</dt><dd>${esc(fin.body.imposto)}</dd><dt>Pagamentos comuns</dt><dd>${esc(fin.body.pagamentos_comuns)}</dd></dl><p class="muted">${esc(fin.body.aviso)}</p>` : ""}` });
   $("#pBody").querySelectorAll("[data-task]").forEach(el => el.onclick = () => openTask(el.dataset.task));
   const r = $("#mkRun"); if (r) r.onclick = () => act(() => api(`/api/agents/mkt_${id}/run`, { method: "POST" }), "CEO do mercado executou");
+  const ms = $("#mkSite"); if (ms) mkSiteHtml(ms, m).catch(e => { ms.innerHTML = `<p class="muted">${esc(e.message)}</p>`; });
   if (can("leads.read")) api(`/api/leads?market_id=${id}`).then(ls => { const el = $("#mkLeads"); if (el) { el.innerHTML = leadsTable(ls); bindLeads(el); } }).catch(() => {});
   const ap = $("#mkAppr"); if (ap) ap.onclick = () => { closePanel(); S.tab = "aprovacoes"; setView("tabelas"); };
+}
+// ---------------------------------------------------------------- financeiro manual e estoque por operação
+const opSel = (ops, name, val, all) => `<select name="${name}">${all ? `<option value="">Todas as operações</option>` : ""}${ops.map(o =>
+  `<option value="${o.tipo}|${o.id}" ${val === o.tipo + "|" + o.id ? "selected" : ""}>${esc(o.nome)}</option>`).join("")}</select>`;
+async function renderFinManual(body, get) {
+  S.fin = S.fin || { month: new Date().toISOString().slice(0, 7), op: "" };
+  const [st, sid] = (S.fin.op || "|").split("|");
+  const [ops, d] = await Promise.all([get("/api/operacoes"), get(`/api/financeiro-manual?month=${S.fin.month}${st ? `&scope_type=${st}&scope_id=${encodeURIComponent(sid)}` : ""}`)]);
+  const w = can("fin.write");
+  body.innerHTML = `<p class="muted">Receitas e despesas lançadas à mão para cada operação (sede, bases, clientes, países). Mensalidades de parceiros entram como receita.
+    Nada é apagado: lançamento errado é cancelado com motivo.</p>
+    <div class="f"><div class="row"><label>Mês<input type="month" id="fnMonth" value="${S.fin.month}"></label><label>Operação${opSel(ops, "fnOp", S.fin.op, true)}</label></div></div>
+    <div class="row" style="gap:10px;flex-wrap:wrap;margin:8px 0">${d.totais.map(t => `<div class="card" style="min-width:200px"><b>${esc(t.operacao)}</b>
+      <div>Receitas <b style="color:#16a34a">${fmtMoney(t.receitas, t.moeda)}</b> · Despesas <b style="color:#dc2626">${fmtMoney(t.despesas, t.moeda)}</b></div>
+      <div>Resultado <b>${fmtMoney(t.resultado, t.moeda)}</b></div>${t.previsto_receitas || t.previsto_despesas ? `<div class="muted">Previsto: +${fmtMoney(t.previsto_receitas, t.moeda)} / −${fmtMoney(t.previsto_despesas, t.moeda)}</div>` : ""}</div>`).join("") || `<span class="muted">Sem lançamentos neste mês.</span>`}</div>
+    ${w ? `<form class="f card" id="fnForm"><b>Novo lançamento</b><div class="row"><label>Operação${opSel(ops, "op", S.fin.op || "central|central")}</label>
+      <label>Tipo<select name="kind"><option value="receita">Receita (entrada)</option><option value="despesa">Despesa (saída)</option></select></label>
+      <label>Categoria<select name="category"></select></label></div>
+      <div class="row"><label>Descrição<input name="description" required maxlength="240"></label><label>Valor<input name="amount" required placeholder="1.250,90" inputmode="decimal"></label>
+      <label>Moeda<input name="currency" value="BRL" maxlength="3" size="4"></label><label>Data<input type="date" name="date" value="${new Date().toISOString().slice(0, 10)}"></label>
+      <label>Situação<select name="status"><option value="realizado">Realizado (já pago/recebido)</option><option value="previsto">Previsto (a pagar/receber)</option></select></label></div>
+      <button class="btn primary small">Lançar</button></form>` : ""}
+    <table class="t"><thead><tr><th>Data</th><th>Operação</th><th>Tipo</th><th>Categoria</th><th>Descrição</th><th>Valor</th><th>Situação</th><th></th></tr></thead><tbody>
+    ${d.lancamentos.map(e => `<tr style="${e.canceled_at ? "opacity:.5;text-decoration:line-through" : ""}"><td>${esc(e.date)}</td><td>${esc(e.scope_name)}</td>
+      <td>${e.kind === "receita" ? badge("receita", "ok") : badge("despesa", "bad")}</td><td>${esc(e.category)}</td><td>${esc(e.description)}${e.cancel_reason ? `<div class="muted">cancelado: ${esc(e.cancel_reason)}</div>` : ""}</td>
+      <td class="mono">${fmtMoney(e.amount_minor, e.currency)}</td><td>${esc(e.status)}</td>
+      <td>${w && !e.canceled_at ? `${e.status === "previsto" ? `<button class="btn small" data-fset="${e.id}">Marcar realizado</button>` : ""} <button class="btn small" data-fcan="${e.id}">Cancelar</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
+  const re = () => renderTables(true);
+  body.querySelector("#fnMonth").onchange = e => { S.fin.month = e.target.value; re(); };
+  body.querySelector("[name=fnOp]").onchange = e => { S.fin.op = e.target.value; re(); };
+  const f = body.querySelector("#fnForm");
+  if (f) { const fill = () => { f.category.innerHTML = d.categorias[f.kind.value].map(c => `<option>${esc(c)}</option>`).join(""); }; f.kind.onchange = fill; fill();
+    f.onsubmit = async e => { e.preventDefault(); const x = Object.fromEntries(new FormData(f).entries()); const [a, b] = x.op.split("|"); delete x.op;
+      await act(() => api("/api/financeiro-manual", { method: "POST", body: { ...x, scope_type: a, scope_id: b } }), "Lançamento registrado"); re(); }; }
+  body.querySelectorAll("[data-fset]").forEach(b => b.onclick = async () => { await act(() => api(`/api/financeiro-manual/${b.dataset.fset}/realizar`, { method: "POST" }), "Marcado como realizado"); re(); });
+  body.querySelectorAll("[data-fcan]").forEach(b => b.onclick = async () => { const r = prompt("Motivo do cancelamento:"); if (!r) return;
+    await act(() => api(`/api/financeiro-manual/${b.dataset.fcan}/cancelar`, { method: "POST", body: { reason: r } }), "Lançamento cancelado"); re(); });
+}
+async function renderEstoqueOp(body, get) {
+  S.stk = S.stk || { op: "" };
+  const [st, sid] = (S.stk.op || "|").split("|");
+  const [ops, items] = await Promise.all([get("/api/operacoes"), get(`/api/estoque-operacoes${st ? `?scope_type=${st}&scope_id=${encodeURIComponent(sid)}` : ""}`)]);
+  const w = can("estoque.write");
+  body.innerHTML = `<p class="muted">Materiais e produtos de cada operação. Saldo nunca fica negativo; abaixo do mínimo abre uma pendência automaticamente.</p>
+    <div class="f"><div class="row"><label>Operação${opSel(ops, "skOp", S.stk.op, true)}</label></div></div>
+    ${w ? `<form class="f card" id="skForm"><b>Novo item</b><div class="row"><label>Operação${opSel(ops, "op", S.stk.op || "central|central")}</label>
+      <label>Nome<input name="name" required maxlength="120"></label><label>SKU<input name="sku" maxlength="40"></label><label>Unidade<input name="unit" value="un" size="4"></label>
+      <label>Mínimo<input name="min_qty" value="0" inputmode="decimal" size="6"></label><label>Custo unitário<input name="cost" placeholder="0,00" size="8"></label></div>
+      <button class="btn primary small">Cadastrar item</button></form>` : ""}
+    <table class="t"><thead><tr><th>Operação</th><th>Item</th><th>Saldo</th><th>Mínimo</th><th>Últimos movimentos</th>${w ? "<th>Movimentar</th>" : ""}</tr></thead><tbody>
+    ${items.map(i => `<tr><td>${esc(i.scope_name)}</td><td><b>${esc(i.name)}</b> ${i.sku ? `<span class="mono muted">${esc(i.sku)}</span>` : ""}</td>
+      <td><b>${esc(String(i.qty))}</b> ${esc(i.unit)} ${i.baixo ? badge("abaixo do mínimo", "bad") : ""}</td><td>${esc(String(i.min_qty))}</td>
+      <td class="muted">${i.movimentos.map(m => `${esc(m.kind)} ${esc(String(m.qty))} → ${esc(String(m.qty_after))} (${esc(m.reason)})`).join("<br>")}</td>
+      ${w ? `<td><form class="f row" style="display:flex;flex-wrap:nowrap" data-mv="${i.id}"><select name="kind"><option value="entrada">entrada</option><option value="saida">saída</option><option value="ajuste">ajuste (saldo final)</option></select>
+        <input name="qty" size="5" required inputmode="decimal"><input name="reason" placeholder="motivo" required size="12"><button class="btn small">OK</button></form></td>` : ""}</tr>`).join("")
+      || `<tr><td class="muted" colspan="6">Nenhum item cadastrado.</td></tr>`}</tbody></table>`;
+  const re = () => renderTables(true);
+  body.querySelector("[name=skOp]").onchange = e => { S.stk.op = e.target.value; re(); };
+  const f = body.querySelector("#skForm");
+  if (f) f.onsubmit = async e => { e.preventDefault(); const x = Object.fromEntries(new FormData(f).entries()); const [a, b] = x.op.split("|"); delete x.op;
+    await act(() => api("/api/estoque-operacoes", { method: "POST", body: { ...x, scope_type: a, scope_id: b } }), "Item cadastrado"); re(); };
+  body.querySelectorAll("form[data-mv]").forEach(fm => fm.onsubmit = async e => { e.preventDefault(); const x = Object.fromEntries(new FormData(fm).entries());
+    await act(() => api(`/api/estoque-operacoes/${fm.dataset.mv}/movimento`, { method: "POST", body: x }), "Movimento registrado"); re(); });
+}
+
+// ---------------------------------------------------------------- catálogo / vitrine do site do país
+async function mkSiteHtml(el, m) {
+  const d = await api(`/api/mercados/${m.id}/site-itens`);
+  const lay = (m.config && m.config.layout) || "classico";
+  el.innerHTML = `<div class="f"><div class="row"><label>Layout do site<select id="mkLay">${Object.entries(d.layouts).map(([k, v]) => `<option value="${k}" ${k === lay ? "selected" : ""}>${esc(v)}</option>`).join("")}</select></label></div></div>
+    <table class="t"><tbody>${d.itens.map(i => `<tr><td style="width:70px">${i.photo ? `<img src="/m/${esc(m.slug)}/img/${esc(i.photo)}" alt="" style="width:64px;height:48px;object-fit:cover;border-radius:6px">` : `<span class="muted">sem foto</span>`}</td>
+      <td><b>${esc(i.title)}</b> ${i.active ? "" : badge("oculto")}<div class="muted">${esc(i.description || "")}</div></td><td>${esc(i.price || "")}</td>
+      <td><button class="btn small" data-itog="${i.id}" data-on="${i.active ? 1 : 0}">${i.active ? "Ocultar" : "Mostrar"}</button> <button class="btn small" data-idel="${i.id}">Remover</button></td></tr>`).join("")
+      || `<tr><td class="muted">Nenhum item. Cadastre produtos ou serviços com foto — eles aparecem como vitrine no site, com botão "pedir orçamento".</td></tr>`}</tbody></table>
+    <form class="f card" id="mkItem"><b>Novo item da vitrine</b><div class="row"><label>Nome<input name="title" required maxlength="80"></label><label>Preço (texto livre)<input name="price" maxlength="30" placeholder="a partir de 49 €"></label>
+      <label>Ordem<input name="position" value="${d.itens.length + 1}" size="3"></label></div>
+      <label>Descrição<textarea name="description" rows="2" maxlength="600"></textarea></label>
+      <label>Foto (JPG, PNG ou WEBP, até 2 MB — use fotos suas ou com licença)<input type="file" name="photo" accept="image/jpeg,image/png,image/webp"></label>
+      <button class="btn primary small">Adicionar à vitrine</button></form>`;
+  const re = () => mkSiteHtml(el, m);
+  el.querySelector("#mkLay").onchange = async e => { await act(() => api(`/api/mercados/${m.id}/layout`, { method: "PUT", body: { layout: e.target.value } }), "Layout aplicado ao site"); m.config.layout = e.target.value; };
+  el.querySelectorAll("[data-idel]").forEach(b => b.onclick = async () => { if (!confirm("Remover este item da vitrine?")) return;
+    await act(() => api(`/api/mercados/${m.id}/site-itens/${b.dataset.idel}`, { method: "DELETE" }), "Item removido"); re(); });
+  el.querySelectorAll("[data-itog]").forEach(b => b.onclick = async () => { const i = d.itens.find(x => x.id === b.dataset.itog);
+    await act(() => api(`/api/mercados/${m.id}/site-itens/${i.id}`, { method: "PUT", body: { ...i, active: b.dataset.on !== "1" } }), "Vitrine atualizada"); re(); });
+  const f = el.querySelector("#mkItem");
+  f.onsubmit = async e => { e.preventDefault(); const x = Object.fromEntries(new FormData(f).entries()); const file = f.photo.files[0]; delete x.photo;
+    if (file) { if (file.size > 2 * 1024 * 1024) return toast("Foto acima de 2 MB", true);
+      x.photo_b64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = no; r.readAsDataURL(file); }); }
+    await act(() => api(`/api/mercados/${m.id}/site-itens`, { method: "POST", body: x }), "Item adicionado ao site"); re(); };
 }
 const LEAD_ST = { novo: "novo", contatado: "contatado", proposta: "proposta enviada", ganho: "ganho ✓", perdido: "perdido" };
 function funilHtml(f) {
@@ -702,7 +794,7 @@ function funilHtml(f) {
 function leadsTable(ls) {
   if (!ls.length) return `<p class="muted">Nenhum lead ainda. O formulário "Peça seu orçamento" fica no site publicado.</p>`;
   return `<table class="t"><thead><tr><th>Quando</th><th>País</th><th>Nome</th><th>Contato</th><th>Origem</th><th>Situação</th></tr></thead><tbody>${ls.map(l => `<tr>
-    <td>${fmtTime(l.created_at)}</td><td>${esc(l.country)}</td><td><b>${esc(l.name)}</b>${l.message ? `<div class="muted">${esc(l.message.slice(0, 140))}</div>` : ""}</td>
+    <td>${fmtTime(l.created_at)}</td><td>${esc(l.country)}</td><td><b>${esc(l.name)}</b>${l.kind === "parceiro" ? " " + badge("parceiro" + (l.plan ? " · " + l.plan : ""), "warn") : ""}${l.message ? `<div class="muted">${esc(l.message.slice(0, 140))}</div>` : ""}</td>
     <td>${l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ""}${l.phone ? `<div class="mono">${esc(l.phone)}</div>` : ""}</td>
     <td>${esc(l.utm_source || "direto")}${l.utm_campaign ? `<div class="muted">${esc(l.utm_campaign)}</div>` : ""}</td>
     <td>${can("leads.write") ? `<select data-lead="${l.id}">${Object.entries(LEAD_ST).map(([k, v]) => `<option value="${k}" ${k === l.status ? "selected" : ""}>${v}</option>`).join("")}</select>` : esc(LEAD_ST[l.status])}</td></tr>`).join("")}</tbody></table>`;
@@ -768,7 +860,7 @@ async function openSector(code) {
 }
 
 // ------------------------------------------------------------------ modo tabelas
-const TABLE_TABS = [["leads", "Leads"], ["quadro", "Quadro de tarefas"], ["atendimento", "Atendimento"], ["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
+const TABLE_TABS = [["leads", "Leads"], ["finmanual", "Financeiro"], ["estoqueop", "Estoque das operações"], ["quadro", "Quadro de tarefas"], ["atendimento", "Atendimento"], ["cadastros", "Cadastros"], ["visao", "Visão geral"], ["pedidos", "Pedidos"], ["tarefas", "Tarefas e pendências"], ["agentes", "Agentes"], ["fechamentos", "Fechamentos"],
   ["aprovacoes", "Aprovações"], ["estoque", "Estoque"], ["eventos", "Eventos"], ["webhooks", "Webhooks"], ["auditoria", "Auditoria"], ["politicas", "Políticas"]];
 async function renderTables(soft, auto = false) {
   // Só a chamada mais recente desenha (uma resposta lenta e antiga nunca cobre dados novos);
@@ -777,7 +869,7 @@ async function renderTables(soft, auto = false) {
   const fresh = () => seq === S.tSeq && !(auto && editing("#tBody"));
   const get = async (url, opts) => { const d = await api(url, opts); if (!fresh()) throw STALE; return d; };
   const tabs = S.me.role === "tecnico" ? [["tarefas", "Minhas tarefas"]] :
-    TABLE_TABS.filter(([k]) => (k === "leads" ? can("leads.read") : k === "atendimento" ? can("atendimento.read") : (S.me.is_central && (k !== "cadastros" || can("cadastros.read")))
+    TABLE_TABS.filter(([k]) => (k === "leads" ? can("leads.read") : k === "finmanual" ? can("fin.read") : k === "estoqueop" ? can("estoque.read") : k === "atendimento" ? can("atendimento.read") : (S.me.is_central && (k !== "cadastros" || can("cadastros.read")))
       || ["quadro", "visao", "pedidos", "tarefas", "agentes", "fechamentos", "eventos"].includes(k)));
   $("#tTabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" aria-selected="${k === S.tab}" data-t="${k}">${v}</button>`).join("");
   $("#tTabs").querySelectorAll("button").forEach(b => b.onclick = () => { S.tab = b.dataset.t; $("#tFilter").value = ""; renderTables(); });
@@ -794,6 +886,8 @@ async function renderTables(soft, auto = false) {
   try {
     if (S.tab === "cadastros") return renderCadastros(body, fresh);
     if (S.tab === "quadro") return renderKanban(body, fresh);
+    if (S.tab === "finmanual") return await renderFinManual(body, get);
+    if (S.tab === "estoqueop") return await renderEstoqueOp(body, get);
     if (S.tab === "leads") { const ls = await get("/api/leads"); body.innerHTML = `<p class="muted">Contatos vindos dos sites de cada país. Mude a situação conforme o atendimento avança.</p>` + leadsTable(ls); bindLeads(body); return; }
     if (S.tab === "atendimento") return renderInbox(body, fresh);
     if (S.tab === "visao") grid([["name", "Parceiro"], ["region", "Região"], ["status", "Sinalização", r => st(r.status)], ["model", "Modelo"], ["overdue_tasks", "Tarefas atrasadas"],
@@ -904,12 +998,21 @@ async function renderCadastros(body, fresh) {
       <label>Cor de destaque (botões)<input type="color" name="cor_destaque" value="${esc(b.cor_destaque)}"></label>
       <label>Fonte<select name="fonte">${Object.entries(FN).map(([k, v]) => `<option value="${k}" ${k === b.fonte ? "selected" : ""}>${v}</option>`).join("")}</select></label>
       <div id="brandPrev" style="min-width:220px;border-radius:12px;padding:12px;color:#fff"></div></div>
+      <label>Sobre a empresa (aparece em todos os sites, seção "Sobre nós")<textarea name="sobre" rows="3" maxlength="1500">${esc(b.sobre || "")}</textarea></label>
+      <label class="row"><input type="checkbox" name="parceiros_ativo" ${b.parceiros_ativo ? "checked" : ""}> Mostrar "Seja nosso parceiro" (planos de mensalidade) nos sites</label>
+      <div class="row">${[0, 1, 2].map(i => { const p = (b.planos || [])[i] || {}; return `<div class="card" style="min-width:200px"><b>Plano ${i + 1}</b>
+        <label>Nome<input name="pl_nome_${i}" value="${esc(p.nome || "")}" maxlength="40"></label><label>Mensalidade (texto)<input name="pl_preco_${i}" value="${esc(p.preco || "")}" maxlength="30" placeholder="R$ 299"></label>
+        <label>Benefícios (um por linha)<textarea name="pl_ben_${i}" rows="3">${esc((p.beneficios || []).join("\n"))}</textarea></label></div>`; }).join("")}</div>
+      <p class="muted">A cobrança automática da mensalidade depende de escolher um meio de pagamento (Pix/boleto/cartão). Até lá, o interessado vira lead "parceiro" e o recebimento é lançado no Financeiro.</p>
       <button class="btn primary small">Salvar identidade</button></form>`;
     const f = el.querySelector("#brandForm"), pv = el.querySelector("#brandPrev");
     const paint = () => { pv.style.background = `linear-gradient(135deg,${f.cor_primaria.value},${f.cor_secundaria.value})`;
       pv.innerHTML = `<b>${esc(f.nome.value || "Sua marca")}</b><div style="opacity:.9">${esc(f.slogan.value || "")}</div><span style="display:inline-block;margin-top:6px;background:${f.cor_destaque.value};color:#111;padding:4px 10px;border-radius:8px;font-weight:700">Peça seu orçamento</span>`; };
     f.oninput = paint; paint();
     f.onsubmit = async e => { e.preventDefault(); const d = Object.fromEntries(new FormData(f).entries());
+      d.parceiros_ativo = f.parceiros_ativo.checked;
+      d.planos = [0, 1, 2].map(i => ({ nome: d[`pl_nome_${i}`], preco: d[`pl_preco_${i}`], beneficios: (d[`pl_ben_${i}`] || "").split("\n") })).filter(p => p.nome && p.nome.trim());
+      for (const k of Object.keys(d)) if (k.startsWith("pl_")) delete d[k];
       await act(() => api("/api/marca", { method: "POST", body: d }), "Identidade visual salva — sites de todos os países atualizados"); };
   }).catch(() => {});
   const ROUTE = { base: "bases", client: "clientes", unit: "unidades", user: "usuarios", sede: "sede" };

@@ -83,8 +83,8 @@ table.t tr.click{cursor:pointer}table.t tr.click:hover td{background:#0f1a2e}
 .ticker{display:flex;align-items:center;gap:16px;padding:0 14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);overflow:hidden;white-space:nowrap}
 .ticker b{color:var(--text);font-weight:500}
 form.f{display:grid;gap:8px}
-form.f label{display:grid;gap:3px;font-size:12px;color:var(--muted)}
-form.f input,form.f select,form.f textarea{background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:7px 9px;color:var(--text)}
+.f label{display:grid;gap:3px;font-size:12px;color:var(--muted)}
+.f input,.f select,.f textarea{background:var(--bg2);border:1px solid var(--line2);border-radius:8px;padding:7px 9px;color:var(--text)}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .toast{position:fixed;bottom:46px;left:50%;transform:translateX(-50%);background:#111c30;border:1px solid var(--line2);padding:10px 16px;border-radius:10px;z-index:60;max-width:90vw}
 .toast.err{border-color:#7f1d1d;color:#fecaca}
